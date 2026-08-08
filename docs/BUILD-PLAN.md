@@ -181,8 +181,8 @@ prompt assembler.
 
 ### B1 — the profile root *[Hermes #14]*
 
-Every path resolves from a **profile root** instead of a fixed home: `~/.seri/<profile>/` (Unix),
-`%LOCALAPPDATA%\seri\<profile>\` (Windows), selected by env var or flag, defaulting to `default`.
+Every path resolves from a **profile root** instead of a fixed home: `~/.seri/<profile>/`,
+selected by env var or flag, defaulting to `default`.
 Config, sessions, checkpoints — and later memories and pending — all hang off it.
 
 That is the whole change: one indirection in `config/paths.ts`, which is still three files. It is
@@ -237,7 +237,7 @@ the entire point and a later refactor could reorder it without any visible sympt
 - Repo, TypeScript, `bun build --compile` targeting `linux-x64`, `linux-arm64`, `darwin-x64`,
   `darwin-arm64`, `windows-x64`
 - GitHub Actions matrix running tests on **Windows, macOS, and Linux from the first commit**
-- Config at `~/.seri/` (Unix) and `%LOCALAPPDATA%\seri\` (Windows); API keys from env or config
+- Config at `~/.seri/`; API keys from env or config
 
 The CI matrix is not premature. Part IV's cross-platform bugs are silent, and they are cheap to
 catch here and expensive to find in month three.
