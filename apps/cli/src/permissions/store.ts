@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
+import { foldsCase } from "../caseFold";
 
 // NOT derived from WRITE_TOOL_NAMES, on purpose: a tool added to the gate must be opted IN here
 // deliberately, never swept in by a set-difference. bash and powershell are excluded because a grant
@@ -10,8 +11,10 @@ import { Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
 export const PERSISTABLE_TOOL_NAMES = ["write_file", "edit"] as const;
 export const PERSISTABLE_TOOLS: ReadonlySet<string> = new Set(PERSISTABLE_TOOL_NAMES);
 
+export const PERMISSIONS_FILENAME = "permissions.yaml";
+
 export function permissionsPath(configDir: string): string {
-  return join(configDir, "permissions.yaml");
+  return join(configDir, PERMISSIONS_FILENAME);
 }
 
 // Copied from checkpointStoreDir (checkpoint/checkpoint.ts:84-92) with the sha256 deliberately
@@ -25,11 +28,11 @@ export function permissionsPath(configDir: string): string {
 // case-sensitive APFS/NTFS volume with two projects differing only in capitalisation folds them
 // into one allowlist.
 //
-// Not extracted into a shared helper and called from checkpointStoreDir: that would be an edit to
-// working code this change does not need. If a third caller appears, extract it then.
+// The case-fold decision itself now lives in caseFold.ts (`config/paths.ts`'s profile-name
+// handling became the third caller this comment used to wait for).
 export function projectKey(worktree: string): string {
   const resolved = resolve(worktree);
-  return process.platform === "win32" || process.platform === "darwin" ? resolved.toLowerCase() : resolved;
+  return foldsCase() ? resolved.toLowerCase() : resolved;
 }
 
 export type Grants = {
