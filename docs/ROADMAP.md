@@ -46,8 +46,9 @@ the accepted cost of not building the same commands twice.
 The `stage-b-tiers-profile-root` loop was opened on 2026-08-06 and stopped before writing any code
 (superseded by PR #33, in flight in another session). Both halves are still open in the tree:
 
-- **B1 — profile root.** `apps/cli/src/config/paths.ts` still resolves a fixed home. No
-  `<profile>` segment, no env var, no flag.
+- **B1 — profile root.** Lands in the `stage-b1-profile-root` PR: `apps/cli/src/config/paths.ts`
+  resolves a profile root selected by `--profile`/`SERI_PROFILE`, defaulting to `default` with no
+  `<profile>` segment and no behavioral delta from today's fixed home.
 - **B2 — prompt tiers.** `apps/cli/src/session/session.ts` still carries `systemPrompt: string` —
   one flat frozen string, no stable/context/volatile split.
 
