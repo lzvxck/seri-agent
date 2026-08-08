@@ -8,7 +8,7 @@ disagree, BUILD-PLAN wins and this file is stale.
 Stage numbers are identities, not an order. They are referenced from outside the plan, so they do
 not get renumbered when the order changes.
 
-Last reconciled against the repo: 2026-08-07.
+Last reconciled against the repo: 2026-08-08.
 
 ## Shipped
 
@@ -21,12 +21,13 @@ Last reconciled against the repo: 2026-08-07.
 | 4 — Checkpoints | PR #17, CI green on all three OSes — **v1, the fully working MVP** |
 | A — Abort/cancellation | PR #23. Unnumbered; `AbortSignal` through the loop and rg |
 | 5 — Verification loop | PR #41. **Retargeted**: the check runs after `write_file`, not `edit`, and a failed edit gets a near-miss report. The original spec was unbuildable — see BUILD-PLAN's Stage 5 section |
+| B1 — profile root | `stage-b1-profile-root` PR. `--profile`/`SERI_PROFILE` select a profile root under `apps/cli/src/config/paths.ts`, defaulting to `default` with no `<profile>` segment and no behavioral delta from the prior fixed home |
 
 ## Remaining, in execution order
 
 | # | Stage | State | Why here |
 |---|---|---|---|
-| 1 | **B — prompt tiers + profile root** | **next, unstarted** | Small now, expensive at 6b — which adds four paths and a second prompt assembler. Also gains a reason: directory trust needs a profile root to store itself in |
+| 1 | **B2 — prompt tiers** | **next, unstarted** | Small now, expensive at 6b — which adds four paths and a second prompt assembler. B1 (profile root) already shipped |
 | 2 | **11a — TUI** | not started | **Moved ahead of 7a/6/7b on 2026-08-07.** Slash commands built before the TUI are built in a shape it cannot use and get paid for twice; 7a's mid-session switching is the next one. Splitting 11 moved the TUI, not the release |
 | 3 | **7a — the gateway** | not started | OpenRouter breadth tier, model catalog, mid-session switching. Moved ahead of Stage 6 on 2026-08-06 (PR #38). Now behind 11a, which delays billing Phase B, the spend cap and the portal's usage surface by the length of the TUI |
 | 4 | **6 — subagents** (incl. 6b curator + memory) | not started | Needs Stage A's signal; 7a first so the curator is a routing target from birth |
@@ -41,19 +42,15 @@ usage surface. `PHASE-A-HANDOFF.md`'s "Stage 7" means 7a. Since 2026-08-07 those
 11a as well — moving the TUI ahead of the gateway delays them by the length of the TUI, which was
 the accepted cost of not building the same commands twice.
 
-## Stage B is next, and it is genuinely unstarted
+## Stage B2 is next, and it is genuinely unstarted
 
-The `stage-b-tiers-profile-root` loop was opened on 2026-08-06 and stopped before writing any code
-(superseded by PR #33, in flight in another session). Both halves are still open in the tree:
+B1 (profile root) shipped via the `stage-b1-profile-root` PR. B2 remains open in the tree:
 
-- **B1 — profile root.** Lands in the `stage-b1-profile-root` PR: `apps/cli/src/config/paths.ts`
-  resolves a profile root selected by `--profile`/`SERI_PROFILE`, defaulting to `default` with no
-  `<profile>` segment and no behavioral delta from today's fixed home.
 - **B2 — prompt tiers.** `apps/cli/src/session/session.ts` still carries `systemPrompt: string` —
   one flat frozen string, no stable/context/volatile split.
 
-Both are refactors with **no behavioral delta**: B1's every existing path must resolve identically
-under the default profile, and B2's assembled prompt must come out byte-identical to today's.
+Like B1, this is a refactor with **no behavioral delta**: the assembled prompt must come out
+byte-identical to today's.
 
 ## Open items that gate work below
 
