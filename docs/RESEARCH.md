@@ -249,3 +249,40 @@ That baseline is a functional autonomous coding agent. Everything above is lever
 - wetheflywheel.com (Roo Code shutdown May 15 2026; OpenCode vs Cline); pinggy.io "Best Open Source CLI Coding Agents 2026"; morphllm/codersera/vibecoding AGENTS.md guides (60k+ repos); MarkTechPost/DevOps.com (Kimi K2.6/K2.7 & Kimi Code CLI); tech-insider/digitalapplied (Factory Terminal-Bench v0.1.1 58.75%, $150M Series C; Windsurf 2; Cursor); baeseokjae.github.io (Amp/Goose/Continue reviews). Feb–Jul 2026.
 
 **Explicit [UNKNOWN]s:** exact internal edit-primitive and context-compaction thresholds of Cursor, Windsurf, Devin, and Factory (closed; behavioral only); the precise real (non-leaked, current) internal architecture of Claude Code beyond official docs; whether the ~50%/~95% Claude Code compaction triggers are current defaults (documented figures conflict).
+
+---
+
+## Post-survey addendum: PrimeIntellect-ai/prime-agent (added 2026-08-08)
+
+Out of scope for the July 2026 convergence pass above — surfaced afterward, during Stage B work,
+by direct investigation (repo README, `packages/coding-agent/docs/*`, the RLM blog post, not a full
+per-axis re-survey). Recorded here rather than backfilled into the matrix, so it stays honest about
+when and how thoroughly it was actually researched.
+
+**What it is:** an open-source, shipped (~8.4k GitHub stars) TypeScript coding/research agent built
+on a **Recursive Language Model (RLM)** loop — the model's only exposed tool is `ipython`; file
+edits, shell commands, and sub-agent calls are all Python code executed in a **persistent kernel**
+that survives across turns and compaction, rather than discrete JSON tool calls in a stateless
+message array. This is a different agent-loop paradigm from every harness in the matrix above (all
+converged on stateless ReAct, Axis 1) — worth naming as a second, more recent point in the design
+space, not a variant of the first. [CONFIRMED from primeintellect.ai/blog/rlm and repo docs]
+
+**Two findings relevant to this repo's own open items:**
+- **"Continual Harness"** (`/refine`, durable supplemental prompts/memories/skill specs, small
+  evidence-backed updates, never rewrites the immutable base prompt, recorded snapshots for
+  rollback) is independent convergence on the same shape as Part I's Hermes #4 (background review
+  fork) — see `docs/ARCHITECTURE.md` Part I row 4 for where this now corroborates an existing
+  ADOPT/ADAPT verdict, not a new one.
+- **No per-action permission gate, attended or unattended.** Checked specifically because it bears
+  on this repo's own open "Unattended permission surface" item (`docs/BUILD-PLAN.md`): grepped
+  `settings.md`/`usage.md`/`architecture.md`/`daemon.md` for approve/permission/confirm/sandbox/
+  deny/allow — no hits resembling a read-only/approve-each/auto style gate. Autonomous mode's
+  `--autonomous-gate` is a test/lint pass-bar (`npm run check`-style), not a safety gate; the
+  README's own disclaimer ("not a security sandbox... use a disposable clone") is the entire
+  mitigation, uniformly, whether a human is watching or not. Confirms this remains a genuinely
+  unsolved problem in the field rather than one this repo is merely late to answer — see
+  `docs/ARCHITECTURE.md` Part V, "Long-horizon autonomy". [CONFIRMED absence in reachable public
+  docs; a gate could theoretically exist undocumented, but "permission policies" is listed in
+  `usage.md` as something *extensions* may add, implying it is not core/shipped]
+
+**Source:** github.com/PrimeIntellect-ai/prime-agent (README, `packages/coding-agent/docs/{index,rlm,long-running-agents,usage}.md`, accessed via `gh api` 2026-08-08); primeintellect.ai/blog/rlm.
