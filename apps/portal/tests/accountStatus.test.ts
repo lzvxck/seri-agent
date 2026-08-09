@@ -41,7 +41,10 @@ describe("readAccountStatus", () => {
       { data: { plan: "pro", subscription_status: "active" }, error: null },
     ]);
 
-    expect(await readAccountStatus(client, "user_1", noWait)).toEqual({ plan: "pro", status: "active" });
+    expect(await readAccountStatus(client, "user_1", noWait)).toEqual({
+      plan: "pro",
+      status: "active",
+    });
     expect(calls).toHaveLength(2);
   });
 
@@ -50,14 +53,18 @@ describe("readAccountStatus", () => {
   test("gives up after the bounded number of retries and rethrows", async () => {
     const { client, calls } = fakeSupabase([{ data: null, error: postgrestError("PGRST303") }]);
 
-    await expect(readAccountStatus(client, "user_1", noWait)).rejects.toEqual(postgrestError("PGRST303"));
+    await expect(readAccountStatus(client, "user_1", noWait)).rejects.toEqual(
+      postgrestError("PGRST303"),
+    );
     expect(calls).toHaveLength(3);
   });
 
   test("does not retry an error that is not PGRST303", async () => {
     const { client, calls } = fakeSupabase([{ data: null, error: postgrestError("PGRST301") }]);
 
-    await expect(readAccountStatus(client, "user_1", noWait)).rejects.toEqual(postgrestError("PGRST301"));
+    await expect(readAccountStatus(client, "user_1", noWait)).rejects.toEqual(
+      postgrestError("PGRST301"),
+    );
     expect(calls).toHaveLength(1);
   });
 });

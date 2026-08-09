@@ -125,7 +125,9 @@ export function syncSubscription(
 ): Promise<void> {
   const mapped = toSubscriptionStatus(payload.data.status);
   if (!mapped) {
-    console.warn(`Polar webhook: unrecognized subscription status "${payload.data.status}", skipping upsert`);
+    console.warn(
+      `Polar webhook: unrecognized subscription status "${payload.data.status}", skipping upsert`,
+    );
     return Promise.resolve();
   }
   const status = mapped === "active" && payload.data.cancelAtPeriodEnd ? "canceled" : mapped;

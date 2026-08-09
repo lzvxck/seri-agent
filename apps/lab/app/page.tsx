@@ -156,7 +156,9 @@ export default function Home() {
                   delay={rowDelay(index, 3)}
                   className="flex h-full flex-col rounded-md border border-on-ink-hairline p-16 md:p-22"
                 >
-                  <h3 className="text-[16px] leading-[1.3] font-bold tracking-[-0.3px]">{principle.title}</h3>
+                  <h3 className="text-[16px] leading-[1.3] font-bold tracking-[-0.3px]">
+                    {principle.title}
+                  </h3>
                   <p className="mt-8 text-on-ink-subtle">{principle.body}</p>
                 </Reveal>
               ))}

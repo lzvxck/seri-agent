@@ -1,6 +1,11 @@
 "use server";
 
-import { type WaitlistState, addToWaitlist, isHoneypotTripped, parseEmail } from "@/lib/waitlist/server";
+import {
+  type WaitlistState,
+  addToWaitlist,
+  isHoneypotTripped,
+  parseEmail,
+} from "@/lib/waitlist/server";
 import { WAITLIST_COPY } from "@/lib/waitlistCopy";
 
 export async function submitWaitlistEmail(

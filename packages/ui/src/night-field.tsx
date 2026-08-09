@@ -198,5 +198,7 @@ export function NightField() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return <canvas ref={ref} aria-hidden="true" className="absolute inset-0 z-0 block h-full w-full" />;
+  return (
+    <canvas ref={ref} aria-hidden="true" className="absolute inset-0 z-0 block h-full w-full" />
+  );
 }

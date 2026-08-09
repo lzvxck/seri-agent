@@ -49,7 +49,9 @@ describe("subscriptionSummary", () => {
    */
   test("a scheduled change that could not be read is named, never rendered as a renewal", () => {
     const summary = subscriptionSummary("max", AT, 10000, "unknown", formatDate);
-    expect(summary.state).toBe("Next billing date 4 September. Scheduled changes unavailable right now.");
+    expect(summary.state).toBe(
+      "Next billing date 4 September. Scheduled changes unavailable right now.",
+    );
     expect(summary.state).not.toContain("Renews");
     // Both survived the failure — they came from the call that worked.
     expect(summary.price).toBe("$100.00/mo");
@@ -112,7 +114,10 @@ describe("invoiceRows", () => {
     const older = order({ id: "order_old", createdAt: new Date("2026-07-01T00:00:00Z") });
     const newer = order({ id: "order_new", createdAt: new Date("2026-08-01T00:00:00Z") });
 
-    expect(invoiceRows([older, newer], formatDate).map((row) => row.id)).toEqual(["order_new", "order_old"]);
+    expect(invoiceRows([older, newer], formatDate).map((row) => row.id)).toEqual([
+      "order_new",
+      "order_old",
+    ]);
   });
 
   test("a refunded order carries its status", () => {

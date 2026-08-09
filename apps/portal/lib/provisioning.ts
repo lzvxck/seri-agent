@@ -44,7 +44,11 @@ async function ensureCustomer(polar: Polar, user: SessionUser): Promise<Customer
  * A failure hands the claim back so the next render retries at once, then propagates: with
  * only one caller ever reaching here, an error is a real error.
  */
-async function createFreeSubscription(deps: ProvisioningDeps, userId: string, freeProductId: string) {
+async function createFreeSubscription(
+  deps: ProvisioningDeps,
+  userId: string,
+  freeProductId: string,
+) {
   try {
     await deps.polar.subscriptions.create({ productId: freeProductId, externalCustomerId: userId });
   } catch (error) {

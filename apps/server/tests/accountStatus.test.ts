@@ -148,23 +148,26 @@ describe("upsertAccountStatus free-event protection", () => {
  * ordering guard above protects.
  */
 describe("upsertAccountStatus", () => {
-  test.each(["pro", "max", "ultra", null] as const)("writes plan %p with no condition", async (plan) => {
-    const { client, upserts, updates } = fakeSupabase();
+  test.each(["pro", "max", "ultra", null] as const)(
+    "writes plan %p with no condition",
+    async (plan) => {
+      const { client, upserts, updates } = fakeSupabase();
 
-    await upsertAccountStatus(client, {
-      workosUserId: "user_1",
-      email: null,
-      polarCustomerId: "cus_1",
-      status: "active",
-      plan,
-      amount: 2000,
-    });
+      await upsertAccountStatus(client, {
+        workosUserId: "user_1",
+        email: null,
+        polarCustomerId: "cus_1",
+        status: "active",
+        plan,
+        amount: 2000,
+      });
 
-    expect(updates).toEqual([]);
-    expect(upserts).toHaveLength(1);
-    expect(upserts[0]?.opts).toEqual({ onConflict: "workos_user_id" });
-    expect(upserts[0]?.row.plan).toBe(plan);
-  });
+      expect(updates).toEqual([]);
+      expect(upserts).toHaveLength(1);
+      expect(upserts[0]?.opts).toEqual({ onConflict: "workos_user_id" });
+      expect(upserts[0]?.row.plan).toBe(plan);
+    },
+  );
 
   for (const status of SUBSCRIPTION_STATUSES) {
     test(`upserts account_status with subscription_status "${status}"`, async () => {

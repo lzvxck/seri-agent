@@ -35,7 +35,15 @@ const inAppLinks = (current: ShellProps["current"]) =>
  * only from the past-due banner on /billing.
  */
 test("every signed-in page carries the same ordered nav, and no link to /api/portal", () => {
-  expect(inAppLinks("account")).toEqual([`href="${PLANS}"`, `href="${BILLING}"`, `href="${USAGE}"`]);
-  expect(inAppLinks("billing")).toEqual([`href="${PLANS}"`, `href="${BILLING}"`, `href="${USAGE}"`]);
+  expect(inAppLinks("account")).toEqual([
+    `href="${PLANS}"`,
+    `href="${BILLING}"`,
+    `href="${USAGE}"`,
+  ]);
+  expect(inAppLinks("billing")).toEqual([
+    `href="${PLANS}"`,
+    `href="${BILLING}"`,
+    `href="${USAGE}"`,
+  ]);
   expect(inAppLinks("usage")).toEqual([`href="${PLANS}"`, `href="${BILLING}"`, `href="${USAGE}"`]);
 });

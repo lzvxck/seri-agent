@@ -77,9 +77,11 @@
   --radius-lg: 24px;
 
   /* Shadows — whisper-soft, per section 4. `card` and `elevated` are identical in spec. */
-  --shadow-card: rgba(0, 0, 0, 0.01) 0px 2px 2px 0px, rgba(0, 0, 0, 0.02) 0px 4px 4px 0px,
+  --shadow-card:
+    rgba(0, 0, 0, 0.01) 0px 2px 2px 0px, rgba(0, 0, 0, 0.02) 0px 4px 4px 0px,
     rgba(0, 0, 0, 0.04) 0px 16px 24px 0px;
-  --shadow-elevated: rgba(0, 0, 0, 0.01) 0px 2px 2px 0px, rgba(0, 0, 0, 0.02) 0px 4px 4px 0px,
+  --shadow-elevated:
+    rgba(0, 0, 0, 0.01) 0px 2px 2px 0px, rgba(0, 0, 0, 0.02) 0px 4px 4px 0px,
     rgba(0, 0, 0, 0.04) 0px 16px 24px 0px;
 
   /* Motion — section 6 */

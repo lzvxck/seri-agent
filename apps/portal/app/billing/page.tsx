@@ -44,12 +44,18 @@ async function attempt<T>(section: string, fn: () => Promise<T>): Promise<Attemp
   try {
     return { ok: true, value: await fn() };
   } catch (error) {
-    console.error(`/billing: ${section} degraded —`, error instanceof Error ? error.message : error);
+    console.error(
+      `/billing: ${section} degraded —`,
+      error instanceof Error ? error.message : error,
+    );
     return { ok: false };
   }
 }
 
-type LiveSubscription = { subscription: ActiveSubscription; scheduled: Attempt<ScheduledChange | null> };
+type LiveSubscription = {
+  subscription: ActiveSubscription;
+  scheduled: Attempt<ScheduledChange | null>;
+};
 
 const NO_LIVE_SUBSCRIPTION: Attempt<LiveSubscription | null> = { ok: true, value: null };
 
@@ -116,7 +122,9 @@ async function liveSubscription(
   if (!paid || paid.plan !== plan) return null;
   return {
     subscription: paid.subscription,
-    scheduled: await attempt("scheduled plan change", () => scheduledChange(deps, paid.subscription)),
+    scheduled: await attempt("scheduled plan change", () =>
+      scheduledChange(deps, paid.subscription),
+    ),
   };
 }
 
@@ -139,7 +147,9 @@ export default async function BillingPage() {
     attempt("payment method", () => getPaymentMethod(user.userId)),
     attempt("invoice history", () => listOrders(polar, user.userId)),
     attempt("payment-method update session", () => createCustomerSession(polar, user.userId)),
-    needsLive ? attempt("renewal date", () => liveSubscription(deps, user.userId, plan)) : NO_LIVE_SUBSCRIPTION,
+    needsLive
+      ? attempt("renewal date", () => liveSubscription(deps, user.userId, plan))
+      : NO_LIVE_SUBSCRIPTION,
   ]);
 
   // A degraded live read and a live read that found nothing are the same thing to every field
@@ -158,9 +168,16 @@ export default async function BillingPage() {
    * a property that does not exist and silently answer "not a cancellation" for the wrong
    * reason.
    */
-  const cancellationScheduled = effectiveScheduled !== "unknown" && effectiveScheduled?.kind === "ends";
+  const cancellationScheduled =
+    effectiveScheduled !== "unknown" && effectiveScheduled?.kind === "ends";
 
-  const summary = subscriptionSummary(plan, effectiveRenewsAt, effectiveAmount, effectiveScheduled, formatDate);
+  const summary = subscriptionSummary(
+    plan,
+    effectiveRenewsAt,
+    effectiveAmount,
+    effectiveScheduled,
+    formatDate,
+  );
 
   return (
     <Shell email={user.email} current="billing">
@@ -171,7 +188,10 @@ export default async function BillingPage() {
        * ours. This is the only place /api/portal is linked from now on.
        */}
       {accountStatus?.status === "past_due" && (
-        <div data-surface="ink" className="mb-29 border border-ink bg-ink p-11 text-on-ink md:mb-34">
+        <div
+          data-surface="ink"
+          className="mb-29 border border-ink bg-ink p-11 text-on-ink md:mb-34"
+        >
           <h2 className="font-mono text-mono font-bold tracking-[-0.4px]">Payment past due</h2>
           <p className="mt-8 max-w-[62ch] text-on-ink-subtle">
             Polar has been unable to charge your card. Update your payment details in Polar's hosted
@@ -183,7 +203,9 @@ export default async function BillingPage() {
         </div>
       )}
 
-      <h1 className="text-[38px] leading-[1.1] font-bold tracking-[-1px] md:text-display">Billing</h1>
+      <h1 className="text-[38px] leading-[1.1] font-bold tracking-[-1px] md:text-display">
+        Billing
+      </h1>
 
       <section className="mt-29 md:mt-34">
         <h2 className="font-mono text-mono font-bold tracking-[-0.4px]">{summary.title}</h2>
@@ -248,7 +270,10 @@ export default async function BillingPage() {
                   <td className="py-6 pr-8">{row.status}</td>
                   <td className="py-6">
                     {row.status === "paid" && (
-                      <a className="underline" href={`/api/invoice?orderId=${encodeURIComponent(row.id)}`}>
+                      <a
+                        className="underline"
+                        href={`/api/invoice?orderId=${encodeURIComponent(row.id)}`}
+                      >
                         Download
                       </a>
                     )}

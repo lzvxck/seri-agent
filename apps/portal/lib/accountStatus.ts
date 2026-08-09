@@ -48,7 +48,8 @@ export async function readAccountStatus(
     // thing entirely: it arrives with no PostgREST code at all and so falls straight through to
     // the throw, which is correct — there is no clock skew to wait out.
     if (error) {
-      if ((error as { code?: unknown })?.code !== "PGRST303" || attempt >= RETRY_DELAYS_MS.length) throw error;
+      if ((error as { code?: unknown })?.code !== "PGRST303" || attempt >= RETRY_DELAYS_MS.length)
+        throw error;
       await wait(RETRY_DELAYS_MS[attempt]);
       continue;
     }

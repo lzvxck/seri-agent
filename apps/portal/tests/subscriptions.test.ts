@@ -10,7 +10,11 @@ const PRODUCTS = {
 
 const PERIOD_END = new Date("2026-09-04T00:00:00Z");
 
-function sub(id: string, productId: string, overrides: Partial<ActiveSubscription> = {}): ActiveSubscription {
+function sub(
+  id: string,
+  productId: string,
+  overrides: Partial<ActiveSubscription> = {},
+): ActiveSubscription {
   return {
     id,
     productId,
@@ -31,7 +35,10 @@ describe("paidSubscription", () => {
     const free = sub("sub_free", "prod_free");
     const paid = sub("sub_paid", "prod_max");
 
-    for (const order of [[free, paid], [paid, free]]) {
+    for (const order of [
+      [free, paid],
+      [paid, free],
+    ]) {
       expect(paidSubscription(order, PRODUCTS)).toEqual({ subscription: paid, plan: "max" });
     }
   });
@@ -71,7 +78,10 @@ describe("holdsOnlyFree", () => {
     const free = sub("sub_free", "prod_free");
     const paid = sub("sub_paid", "prod_pro");
 
-    for (const order of [[free, paid], [paid, free]]) {
+    for (const order of [
+      [free, paid],
+      [paid, free],
+    ]) {
       expect(holdsOnlyFree(order, PRODUCTS)).toBe(false);
     }
   });
@@ -79,7 +89,10 @@ describe("holdsOnlyFree", () => {
   // The rotated-product-id case. Reporting "free" here would offer a checkout the guard
   // then refuses, which is the deadlock the shared predicate exists to prevent.
   test("is false when a product no longer maps, even alongside a free subscription", () => {
-    const subscriptions = [sub("sub_free", "prod_free"), sub("sub_x", "prod_from_another_environment")];
+    const subscriptions = [
+      sub("sub_free", "prod_free"),
+      sub("sub_x", "prod_from_another_environment"),
+    ];
 
     expect(holdsOnlyFree(subscriptions, PRODUCTS)).toBe(false);
   });

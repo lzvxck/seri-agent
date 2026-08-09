@@ -24,7 +24,12 @@ function fakeSupabase(response: { error: unknown }) {
   return { client: client as unknown as SupabaseClient, inserted };
 }
 
-const postgrestError = (code: string) => ({ message: `insert failed (${code})`, details: "", hint: "", code });
+const postgrestError = (code: string) => ({
+  message: `insert failed (${code})`,
+  details: "",
+  hint: "",
+  code,
+});
 
 describe("parseEmail", () => {
   test("normalizes", () => {
@@ -88,7 +93,10 @@ describe("honeypot", () => {
     form.set(HONEYPOT_FIELD, "http://spam.example");
 
     expect(isHoneypotTripped(form)).toBe(true);
-    expect(await submitWaitlistEmail(WAITLIST_INITIAL, form)).toEqual({ status: "ok", message: WAITLIST_COPY.ok });
+    expect(await submitWaitlistEmail(WAITLIST_INITIAL, form)).toEqual({
+      status: "ok",
+      message: WAITLIST_COPY.ok,
+    });
   });
 
   // Negative control: the same call with the honeypot empty reaches the real client, which
@@ -99,7 +107,10 @@ describe("honeypot", () => {
     form.set(HONEYPOT_FIELD, "");
 
     expect(isHoneypotTripped(form)).toBe(false);
-    expect(await submitWaitlistEmail(WAITLIST_INITIAL, form)).toEqual({ status: "error", message: WAITLIST_COPY.failed });
+    expect(await submitWaitlistEmail(WAITLIST_INITIAL, form)).toEqual({
+      status: "error",
+      message: WAITLIST_COPY.failed,
+    });
   });
 });
 
@@ -125,10 +136,9 @@ describe("submitWaitlistEmail: success and duplicate copy", () => {
       fetch() {
         // PostgREST answers a unique-violation insert with 409 and a {code: "23505", ...} body;
         // any other insert succeeds with 201 and an empty array.
-        return new Response(
-          stubStatus === 201 ? "[]" : JSON.stringify(postgrestError("23505")),
-          { status: stubStatus },
-        );
+        return new Response(stubStatus === 201 ? "[]" : JSON.stringify(postgrestError("23505")), {
+          status: stubStatus,
+        });
       },
     });
     process.env.SUPABASE_URL = `http://127.0.0.1:${stub.port}`;

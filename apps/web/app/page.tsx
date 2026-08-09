@@ -83,7 +83,8 @@ const MODES = [
   {
     name: "auto",
     tag: null,
-    description: "Runs without stopping to ask, once you've decided the task is worth it. Your call, not the model's.",
+    description:
+      "Runs without stopping to ask, once you've decided the task is worth it. Your call, not the model's.",
   },
 ];
 
@@ -153,8 +154,8 @@ export default function Home() {
               </h2>
               <p className="mt-11 max-w-[58ch] text-on-ink-subtle md:mt-16 md:text-[16px]/[1.4]">
                 As turns complete, a separate pass reads the transcript with one job: work out what
-                was worth learning. It can write to memory, within a fixed size budget. It cannot run
-                a command, edit a file, or reach the network — and what it writes is staged, not
+                was worth learning. It can write to memory, within a fixed size budget. It cannot
+                run a command, edit a file, or reach the network — and what it writes is staged, not
                 applied.
               </p>
             </Reveal>
@@ -198,7 +199,9 @@ export default function Home() {
                 className="flex h-full flex-col rounded-md border border-ink-hairline bg-canvas p-16 shadow-card md:p-22"
               >
                 <feature.icon size={20} strokeWidth={1.5} aria-hidden="true" />
-                <h3 className="mt-11 text-[16px] leading-[1.3] font-bold tracking-[-0.3px]">{feature.title}</h3>
+                <h3 className="mt-11 text-[16px] leading-[1.3] font-bold tracking-[-0.3px]">
+                  {feature.title}
+                </h3>
                 <p className="mt-6 text-ink-subtle">{feature.body}</p>
               </Reveal>
             ))}
@@ -213,8 +216,8 @@ export default function Home() {
                 You still decide what it can touch.
               </h2>
               <p className="mt-11 max-w-[58ch] text-on-ink-subtle md:mt-16 md:text-[16px]/[1.4]">
-                Learning does not widen what it may do. Permission is derived from a single list in the
-                source tree, and the mode you are in decides what happens next. Cycle it with{" "}
+                Learning does not widen what it may do. Permission is derived from a single list in
+                the source tree, and the mode you are in decides what happens next. Cycle it with{" "}
                 <code className="font-mono text-on-ink">/mode</code>.
               </p>
             </Reveal>
@@ -268,12 +271,14 @@ export default function Home() {
                 {
                   step: "02",
                   command: "seri config set GROQ_API_KEY <your-key>",
-                  caption: "Stored owner-only on your machine. An environment variable wins over it.",
+                  caption:
+                    "Stored owner-only on your machine. An environment variable wins over it.",
                 },
                 {
                   step: "03",
                   command: "seri login",
-                  caption: "Optional — only if you want a hosted account. The BYOK path never needs it.",
+                  caption:
+                    "Optional — only if you want a hosted account. The BYOK path never needs it.",
                 },
               ].map((item, index) => (
                 <Reveal
@@ -282,7 +287,9 @@ export default function Home() {
                   delay={index * 100}
                   className="flex flex-col gap-8 border-b border-ink-hairline pb-16 last:border-0 last:pb-0 md:flex-row md:items-center md:gap-16"
                 >
-                  <span className="shrink-0 font-mono text-ink-subtle tracking-[1px]">{item.step}</span>
+                  <span className="shrink-0 font-mono text-ink-subtle tracking-[1px]">
+                    {item.step}
+                  </span>
                   <code className="overflow-x-auto rounded-sm border border-ink-hairline px-8 py-8 font-mono text-mono whitespace-pre md:shrink-0">
                     {item.command}
                   </code>
@@ -300,8 +307,8 @@ export default function Home() {
               Supported platforms
             </h2>
             <p className="mt-11 max-w-[58ch] text-ink-subtle md:text-[16px]/[1.4]">
-              One script detects your OS and CPU architecture and downloads the matching binary. Windows gets a
-              real PowerShell, not a translation layer.
+              One script detects your OS and CPU architecture and downloads the matching binary.
+              Windows gets a real PowerShell, not a translation layer.
             </p>
           </Reveal>
 
@@ -310,7 +317,10 @@ export default function Home() {
               <table className="w-full border-collapse text-left">
                 <thead>
                   <tr className="border-b border-ink">
-                    <th scope="col" className="py-8 pr-11 font-mono font-normal uppercase tracking-[1px]">
+                    <th
+                      scope="col"
+                      className="py-8 pr-11 font-mono font-normal uppercase tracking-[1px]"
+                    >
                       OS
                     </th>
                     <th scope="col" className="py-8 font-mono font-normal uppercase tracking-[1px]">
@@ -341,8 +351,8 @@ export default function Home() {
                 It gets better at your codebase.
               </h2>
               <p className="mx-auto mt-11 max-w-[52ch] text-on-ink-subtle md:mt-16 md:text-[16px]/[1.4]">
-                One command to install. It starts read-only, what it keeps is bounded, and everything
-                it learns waits for your approval by default before it counts.
+                One command to install. It starts read-only, what it keeps is bounded, and
+                everything it learns waits for your approval by default before it counts.
               </p>
               <div className="mt-29 flex flex-wrap justify-center gap-8">
                 <Button asChild variant="onInk">
@@ -357,7 +367,10 @@ export default function Home() {
         </section>
       </main>
 
-      <SiteFooter wordmark="seri" builtBy={{ label: "Seriora Research", href: "https://seriora.ai" }} />
+      <SiteFooter
+        wordmark="seri"
+        builtBy={{ label: "Seriora Research", href: "https://seriora.ai" }}
+      />
     </>
   );
 }

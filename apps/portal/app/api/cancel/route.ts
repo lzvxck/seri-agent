@@ -7,5 +7,10 @@ import { getSessionUser } from "@/lib/session";
 // account is the session's and the subscription is whichever one it holds that is not Free.
 export async function POST(): Promise<Response> {
   const { userId } = await getSessionUser();
-  return cancelPaidPlan({ polar: getPolarClient(), products: process.env, userId, origin: portalOrigin() });
+  return cancelPaidPlan({
+    polar: getPolarClient(),
+    products: process.env,
+    userId,
+    origin: portalOrigin(),
+  });
 }

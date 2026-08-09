@@ -35,7 +35,8 @@ export async function getPaymentMethod(
   const response = await fetchImpl(`${base}/v1/customers/external/${externalId}/payment-methods`, {
     headers: { Authorization: `Bearer ${process.env.POLAR_ACCESS_TOKEN}` },
   });
-  if (!response.ok) throw new Error(`Polar payment-methods request failed with status ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Polar payment-methods request failed with status ${response.status}`);
 
   const { items } = (await response.json()) as PolarPaymentMethodsResponse;
   /*
@@ -57,5 +58,10 @@ export async function getPaymentMethod(
   const metadata = (items.find((item) => item.is_default) ?? single)?.method_metadata;
   if (!metadata) return null;
 
-  return { brand: metadata.brand, last4: metadata.last4, expMonth: metadata.exp_month, expYear: metadata.exp_year };
+  return {
+    brand: metadata.brand,
+    last4: metadata.last4,
+    expMonth: metadata.exp_month,
+    expYear: metadata.exp_year,
+  };
 }

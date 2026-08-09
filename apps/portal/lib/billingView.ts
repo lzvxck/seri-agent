@@ -4,7 +4,12 @@ import type { ScheduledChange } from "./scheduled";
 
 const TIER_NAME: Record<Plan, string> = { free: "Free", pro: "Pro", max: "Max", ultra: "Ultra" };
 
-export type SubscriptionSummary = { title: string; price: string; state: string; allowanceLine: string };
+export type SubscriptionSummary = {
+  title: string;
+  price: string;
+  state: string;
+  allowanceLine: string;
+};
 
 /*
  * Covers the four states `app/page.tsx:70-92` distinguishes — an unrecognized product, a pending
@@ -29,7 +34,8 @@ export function subscriptionSummary(
     return {
       title: "Plan not recognized",
       price: "",
-      state: "You're on a plan we no longer offer. Invoices, payment method and cancellation are below.",
+      state:
+        "You're on a plan we no longer offer. Invoices, payment method and cancellation are below.",
       allowanceLine: "",
     };
   }
@@ -48,7 +54,12 @@ export function subscriptionSummary(
    */
   if (scheduled === "unknown") {
     const period = renewsAt ? `Next billing date ${formatDate(renewsAt)}. ` : "";
-    return { title, price, state: `${period}Scheduled changes unavailable right now.`, allowanceLine };
+    return {
+      title,
+      price,
+      state: `${period}Scheduled changes unavailable right now.`,
+      allowanceLine,
+    };
   }
 
   if (scheduled?.kind === "ends") {

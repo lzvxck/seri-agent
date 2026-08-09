@@ -3,7 +3,13 @@ import type { SubscriptionCustomer } from "@polar-sh/sdk/models/components/subsc
 import type { WebhookSubscriptionCanceledPayload } from "@polar-sh/sdk/models/components/webhooksubscriptioncanceledpayload";
 import type { WebhookSubscriptionUpdatedPayload } from "@polar-sh/sdk/models/components/webhooksubscriptionupdatedpayload";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { onSubscriptionCanceled, syncSubscription, toAccountStatusParams, toPlan, toSubscriptionStatus } from "../app/api/webhooks/polar/route";
+import {
+  onSubscriptionCanceled,
+  syncSubscription,
+  toAccountStatusParams,
+  toPlan,
+  toSubscriptionStatus,
+} from "../app/api/webhooks/polar/route";
 
 const PRODUCTS = {
   POLAR_PRODUCT_FREE: "prod_free",
@@ -41,7 +47,12 @@ function captureError(sink: unknown[]): () => void {
 }
 
 function fakeCustomer(overrides: Partial<SubscriptionCustomer>): SubscriptionCustomer {
-  return { id: "cus_1", externalId: "user_1", email: "a@example.com", ...overrides } as SubscriptionCustomer;
+  return {
+    id: "cus_1",
+    externalId: "user_1",
+    email: "a@example.com",
+    ...overrides,
+  } as SubscriptionCustomer;
 }
 
 describe("toPlan", () => {
@@ -82,7 +93,9 @@ describe("toPlan", () => {
     const logged: unknown[] = [];
     const restore = captureError(logged);
 
-    expect(toPlan("prod_free", { POLAR_PRODUCT_FREE: "prod_free", POLAR_PRODUCT_PRO: "prod_pro" })).toBeNull();
+    expect(
+      toPlan("prod_free", { POLAR_PRODUCT_FREE: "prod_free", POLAR_PRODUCT_PRO: "prod_pro" }),
+    ).toBeNull();
 
     restore();
     expect(String(logged[0])).toContain("POLAR_PRODUCT_MAX, POLAR_PRODUCT_ULTRA not set");
@@ -115,11 +128,15 @@ describe("toAccountStatusParams", () => {
   });
 
   test("returns null when externalId is missing", () => {
-    expect(toAccountStatusParams(fakeCustomer({ externalId: null }), "active", "pro", 2000)).toBeNull();
+    expect(
+      toAccountStatusParams(fakeCustomer({ externalId: null }), "active", "pro", 2000),
+    ).toBeNull();
   });
 
   test("returns null when externalId is undefined", () => {
-    expect(toAccountStatusParams(fakeCustomer({ externalId: undefined }), "active", "pro", 2000)).toBeNull();
+    expect(
+      toAccountStatusParams(fakeCustomer({ externalId: undefined }), "active", "pro", 2000),
+    ).toBeNull();
   });
 });
 
@@ -134,7 +151,9 @@ function fakeSupabase() {
   const calls: { row: Record<string, unknown> }[] = [];
   const client = {
     from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }),
+      select: () => ({
+        eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }),
+      }),
       upsert: (row: Record<string, unknown>) => {
         calls.push({ row });
         return Promise.resolve({ data: null, error: null });
@@ -150,9 +169,18 @@ function canceledPayload(productId: string): WebhookSubscriptionCanceledPayload 
   } as unknown as WebhookSubscriptionCanceledPayload;
 }
 
-function updatedPayload(status: string, cancelAtPeriodEnd: boolean): WebhookSubscriptionUpdatedPayload {
+function updatedPayload(
+  status: string,
+  cancelAtPeriodEnd: boolean,
+): WebhookSubscriptionUpdatedPayload {
   return {
-    data: { status, cancelAtPeriodEnd, productId: "prod_pro", amount: 2000, customer: fakeCustomer({}) },
+    data: {
+      status,
+      cancelAtPeriodEnd,
+      productId: "prod_pro",
+      amount: 2000,
+      customer: fakeCustomer({}),
+    },
   } as unknown as WebhookSubscriptionUpdatedPayload;
 }
 

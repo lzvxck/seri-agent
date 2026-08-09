@@ -10,7 +10,10 @@ const noWait = async () => {};
 
 describe("listOrders", () => {
   test("collects items across every page the async iterator yields", async () => {
-    const pages = [{ result: { items: [{ id: "order_1" }] } }, { result: { items: [{ id: "order_2" }] } }];
+    const pages = [
+      { result: { items: [{ id: "order_1" }] } },
+      { result: { items: [{ id: "order_2" }] } },
+    ];
     const client = {
       orders: {
         list: () =>
@@ -50,7 +53,11 @@ describe("invoiceUrl", () => {
   }
 
   test("retries a 404 — the doc generation Polar describes as a 202 plus a few seconds — then succeeds", async () => {
-    const { client, calls } = fakePolar(["404", "404", { url: "https://sandbox.polar.sh/invoice.pdf" }]);
+    const { client, calls } = fakePolar([
+      "404",
+      "404",
+      { url: "https://sandbox.polar.sh/invoice.pdf" },
+    ]);
 
     const url = await invoiceUrl(client, "order_1", noWait);
 
