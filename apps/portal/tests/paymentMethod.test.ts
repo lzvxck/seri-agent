@@ -31,8 +31,14 @@ describe("getPaymentMethod", () => {
       ok: true,
       json: async () => ({
         items: [
-          { is_default: false, method_metadata: { brand: "mastercard", last4: "0000", exp_month: 1, exp_year: 2030 } },
-          { is_default: true, method_metadata: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } },
+          {
+            is_default: false,
+            method_metadata: { brand: "mastercard", last4: "0000", exp_month: 1, exp_year: 2030 },
+          },
+          {
+            is_default: true,
+            method_metadata: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 },
+          },
         ],
       }),
     });
@@ -56,7 +62,12 @@ describe("getPaymentMethod", () => {
     const { fetchImpl } = fakeFetch({
       ok: true,
       json: async () => ({
-        items: [{ is_default: false, method_metadata: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } }],
+        items: [
+          {
+            is_default: false,
+            method_metadata: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 },
+          },
+        ],
       }),
     });
 
@@ -75,8 +86,14 @@ describe("getPaymentMethod", () => {
       ok: true,
       json: async () => ({
         items: [
-          { is_default: false, method_metadata: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } },
-          { is_default: false, method_metadata: { brand: "mastercard", last4: "0000", exp_month: 1, exp_year: 2030 } },
+          {
+            is_default: false,
+            method_metadata: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 },
+          },
+          {
+            is_default: false,
+            method_metadata: { brand: "mastercard", last4: "0000", exp_month: 1, exp_year: 2030 },
+          },
         ],
       }),
     });

@@ -17,7 +17,12 @@ export function SiteFooter({
           {builtBy ? (
             <span className="font-normal">
               {" by "}
-              <a href={builtBy.href} target="_blank" rel="noreferrer" className="text-ink-subtle hover:text-ink">
+              <a
+                href={builtBy.href}
+                target="_blank"
+                rel="noreferrer"
+                className="text-ink-subtle hover:text-ink"
+              >
                 {builtBy.label}
               </a>
             </span>

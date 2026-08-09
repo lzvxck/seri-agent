@@ -46,14 +46,19 @@ describe("seriora.ai copy", () => {
    */
   test("the holding page says nothing the copy policy forbids", () => {
     const waitlistCopy = Object.values(WAITLIST_COPY).join(" ");
-    assertClean(`${textNodes(renderToStaticMarkup(createElement(Holding)))} ${META} ${waitlistCopy}`, {
-      allowComingSoon: true,
-    });
+    assertClean(
+      `${textNodes(renderToStaticMarkup(createElement(Holding)))} ${META} ${waitlistCopy}`,
+      {
+        allowComingSoon: true,
+      },
+    );
   });
 
   // The privacy page does not say "coming soon" and must not be granted that exemption.
   test("the privacy page says nothing the copy policy forbids", () => {
-    assertClean(`${textNodes(renderToStaticMarkup(createElement(Privacy)))} ${privacyMetadata.title}`);
+    assertClean(
+      `${textNodes(renderToStaticMarkup(createElement(Privacy)))} ${privacyMetadata.title}`,
+    );
   });
 
   test("leads with the research thesis", () => {

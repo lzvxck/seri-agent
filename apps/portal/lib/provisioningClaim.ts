@@ -37,13 +37,19 @@ const STALE_CLAIM_MS = 60_000;
  * The insert commits on its own. No transaction is held open across the Polar call that
  * follows — a third-party HTTP request must never sit inside a row lock.
  */
-export async function claimProvisioning(supabase: SupabaseClient, workosUserId: string): Promise<boolean> {
+export async function claimProvisioning(
+  supabase: SupabaseClient,
+  workosUserId: string,
+): Promise<boolean> {
   // ON CONFLICT DO NOTHING ... RETURNING: rows come back only when this statement was the
   // one that inserted, which is the winner/loser signal. The unique constraint on the
   // primary key is what makes it atomic, so no read-then-write gap exists to lose.
   const { data, error } = await supabase
     .from("provisioning_claims")
-    .upsert({ workos_user_id: workosUserId }, { onConflict: "workos_user_id", ignoreDuplicates: true })
+    .upsert(
+      { workos_user_id: workosUserId },
+      { onConflict: "workos_user_id", ignoreDuplicates: true },
+    )
     .select("workos_user_id");
   if (error) throw error;
   if ((data?.length ?? 0) > 0) return true;
@@ -90,7 +96,10 @@ async function reclaimStale(supabase: SupabaseClient, workosUserId: string): Pro
  * activeSubscriptions read long before it reaches a claim, and that read was measured to see
  * a fresh customer's subscription on the very first call.
  */
-export async function completeProvisioning(supabase: SupabaseClient, workosUserId: string): Promise<void> {
+export async function completeProvisioning(
+  supabase: SupabaseClient,
+  workosUserId: string,
+): Promise<void> {
   const { error } = await supabase
     .from("provisioning_claims")
     .delete()
@@ -103,7 +112,10 @@ export async function completeProvisioning(supabase: SupabaseClient, workosUserI
  * rather than waiting out the stale window. Best effort: the caller is already throwing the
  * real error, and losing this only costs the delay the stale takeover exists to bound.
  */
-export async function releaseProvisioning(supabase: SupabaseClient, workosUserId: string): Promise<void> {
+export async function releaseProvisioning(
+  supabase: SupabaseClient,
+  workosUserId: string,
+): Promise<void> {
   const { error } = await supabase
     .from("provisioning_claims")
     .delete()

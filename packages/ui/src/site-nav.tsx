@@ -21,13 +21,21 @@ export function SiteNav({
   return (
     <header className="sticky top-0 z-50 border-b border-ink-hairline bg-canvas/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1080px] items-center justify-between px-11 py-8 md:px-16">
-        <a href="#top" className="inline-flex items-center gap-3 font-mono text-mono font-bold tracking-[-0.4px]">
+        <a
+          href="#top"
+          className="inline-flex items-center gap-3 font-mono text-mono font-bold tracking-[-0.4px]"
+        >
           <SerioraMark />
           {wordmark}
         </a>
         <nav className="flex items-center gap-4">
           {links.map((link) => (
-            <Button key={link.href} asChild variant={link.href === current ? "default" : "ghost"} size="sm">
+            <Button
+              key={link.href}
+              asChild
+              variant={link.href === current ? "default" : "ghost"}
+              size="sm"
+            >
               <a href={link.href}>{link.label}</a>
             </Button>
           ))}

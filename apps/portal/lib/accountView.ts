@@ -53,12 +53,23 @@ export function planCards(
       // The held plan keeps its name only while nothing is scheduled against it. Under a
       // pending downgrade it is a live choice again, and choosing it is the way back.
       if (!scheduled) return { plan: tier, current, label: "Current plan", selectable: false };
-      if (ending) return { plan: tier, current, label: `Ends ${formatDate(scheduled.at)}`, selectable: false };
+      if (ending)
+        return {
+          plan: tier,
+          current,
+          label: `Ends ${formatDate(scheduled.at)}`,
+          selectable: false,
+        };
       return { plan: tier, current, label: "Keep this plan", selectable: true };
     }
 
     if (destination) {
-      return { plan: tier, current, label: `Begins ${formatDate(scheduled.at)}`, selectable: false };
+      return {
+        plan: tier,
+        current,
+        label: `Begins ${formatDate(scheduled.at)}`,
+        selectable: false,
+      };
     }
 
     /*

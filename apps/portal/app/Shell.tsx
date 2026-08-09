@@ -19,7 +19,11 @@ export type ShellProps = {
   children: ReactNode;
 };
 
-const CURRENT_HREF: Record<ShellProps["current"], string> = { account: PLANS, billing: BILLING, usage: USAGE };
+const CURRENT_HREF: Record<ShellProps["current"], string> = {
+  account: PLANS,
+  billing: BILLING,
+  usage: USAGE,
+};
 
 export function Shell({ email, current, children }: ShellProps) {
   return (
@@ -49,7 +53,10 @@ export function Shell({ email, current, children }: ShellProps) {
         </section>
       </main>
 
-      <SiteFooter wordmark="seri" builtBy={{ label: "Seriora Research", href: "https://seriora.ai" }} />
+      <SiteFooter
+        wordmark="seri"
+        builtBy={{ label: "Seriora Research", href: "https://seriora.ai" }}
+      />
     </>
   );
 }

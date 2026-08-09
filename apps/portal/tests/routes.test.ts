@@ -21,7 +21,11 @@ const ORIGIN = "https://portal.seriora.ai";
 const PERIOD_END = new Date("2026-09-04T00:00:00Z");
 
 // Renewing, not winding down, unless a test says otherwise.
-function sub(id: string, productId: string, overrides: Partial<ActiveSubscription> = {}): ActiveSubscription {
+function sub(
+  id: string,
+  productId: string,
+  overrides: Partial<ActiveSubscription> = {},
+): ActiveSubscription {
   return {
     id,
     productId,
@@ -99,14 +103,22 @@ function fakePolar(
     customerSessions: {
       create: (args: unknown) => {
         calls.push({ method: "customerSessions.create", args });
-        return Promise.resolve({ token: "polar_cst_test", expiresAt: new Date("2026-09-01T00:00:00Z") });
+        return Promise.resolve({
+          token: "polar_cst_test",
+          expiresAt: new Date("2026-09-01T00:00:00Z"),
+        });
       },
     },
   };
   return { client: client as unknown as Polar, calls };
 }
 
-const deps = (polar: Polar) => ({ polar, products: PRODUCTS, userId: SESSION_USER_ID, origin: ORIGIN });
+const deps = (polar: Polar) => ({
+  polar,
+  products: PRODUCTS,
+  userId: SESSION_USER_ID,
+  origin: ORIGIN,
+});
 
 // app/usage/page.tsx is a filesystem route that never imports USAGE, so the two can only be
 // held together from outside: renaming the directory has to fail here rather than in a 404 on
@@ -163,7 +175,10 @@ describe("createCheckout", () => {
 
     await createCheckout(deps(polar), "pro");
 
-    expect(calls.map((call) => call.method)).toEqual(["customers.getStateExternal", "checkouts.create"]);
+    expect(calls.map((call) => call.method)).toEqual([
+      "customers.getStateExternal",
+      "checkouts.create",
+    ]);
   });
 
   /*
@@ -173,7 +188,9 @@ describe("createCheckout", () => {
    * Polar would refuse the Subscribe step and the checkout URL would lead nowhere.
    */
   test("refuses the checkout rather than revoking a subscription that costs money", async () => {
-    const { client: polar, calls } = fakePolar([sub("sub_mislabelled", "prod_free", { amount: 2000 })]);
+    const { client: polar, calls } = fakePolar([
+      sub("sub_mislabelled", "prod_free", { amount: 2000 }),
+    ]);
 
     const response = await createCheckout(deps(polar), "pro");
 
@@ -294,7 +311,10 @@ describe("changePlan", () => {
 
     expect(calls).toContainEqual({
       method: "subscriptions.update",
-      args: { id: "sub_paid", subscriptionUpdate: { productId: "prod_max", prorationBehavior: "invoice" } },
+      args: {
+        id: "sub_paid",
+        subscriptionUpdate: { productId: "prod_max", prorationBehavior: "invoice" },
+      },
     });
     // The free subscription is left running on purpose; revoking it made Polar emit an
     // event that overwrote the paying customer's row.
@@ -337,7 +357,9 @@ describe("changePlan", () => {
     const response = await changePlan(deps(polar), "max");
 
     expect(response.status).toBe(409);
-    expect(await response.text()).toBe("This plan is scheduled to end. Resume it first, then change plan.");
+    expect(await response.text()).toBe(
+      "This plan is scheduled to end. Resume it first, then change plan.",
+    );
     expect(calls.some((call) => call.method === "subscriptions.update")).toBe(false);
   });
 
@@ -354,7 +376,9 @@ describe("changePlan", () => {
     // The 403 Polar really answers here, so the test fails the way the customer met it rather
     // than on a call count: without the guard this reaches applyUpdate and comes back 409
     // "This subscription has already ended. Start a new one to continue."
-    const alreadyCanceled = Object.assign(new Error("AlreadyCanceledSubscription"), { statusCode: 403 });
+    const alreadyCanceled = Object.assign(new Error("AlreadyCanceledSubscription"), {
+      statusCode: 403,
+    });
     const { client: polar, calls } = fakePolar(
       [sub("sub_session", "prod_pro", { cancelAtPeriodEnd: true })],
       alreadyCanceled,
@@ -385,7 +409,9 @@ describe("changePlan", () => {
     async (polar: Polar) => changePlan(deps(polar), "max"),
     async (polar: Polar) => createCheckout(deps(polar), "max"),
   ])("refusal %# never tells the customer to resume under Manage billing", async (call) => {
-    const { client: polar } = fakePolar([sub("sub_session", "prod_pro", { cancelAtPeriodEnd: true })]);
+    const { client: polar } = fakePolar([
+      sub("sub_session", "prod_pro", { cancelAtPeriodEnd: true }),
+    ]);
 
     expect(await (await call(polar)).text()).not.toContain("Manage billing");
   });
@@ -394,7 +420,9 @@ describe("changePlan", () => {
   // AlreadyCanceledSubscription. Kept as the backstop for the window between our read and
   // the update, where the customer could have cancelled in Polar's portal meanwhile.
   test("answers 409, not a 500, when Polar says the subscription is already canceled", async () => {
-    const alreadyCanceled = Object.assign(new Error("AlreadyCanceledSubscription"), { statusCode: 403 });
+    const alreadyCanceled = Object.assign(new Error("AlreadyCanceledSubscription"), {
+      statusCode: 403,
+    });
     const { client: polar } = fakePolar([sub("sub_session", "prod_pro")], alreadyCanceled);
 
     expect((await changePlan(deps(polar), "max")).status).toBe(409);
@@ -423,12 +451,15 @@ describe("changePlan", () => {
     expect(calls.some((call) => call.method === "subscriptions.update")).toBe(false);
   });
 
-  test.each(["enterprise", "", null, { plan: "pro" }])("rejects the unknown plan label %p", async (plan) => {
-    const { client: polar, calls } = fakePolar([sub("sub_session", "prod_pro")]);
+  test.each(["enterprise", "", null, { plan: "pro" }])(
+    "rejects the unknown plan label %p",
+    async (plan) => {
+      const { client: polar, calls } = fakePolar([sub("sub_session", "prod_pro")]);
 
-    expect((await changePlan(deps(polar), plan)).status).toBe(400);
-    expect(calls).toEqual([]);
-  });
+      expect((await changePlan(deps(polar), plan)).status).toBe(400);
+      expect(calls).toEqual([]);
+    },
+  );
 
   /*
    * Down to Free is a cancellation at the end of the paid period — never a revoke, which
@@ -491,7 +522,9 @@ describe("resumePaidPlan", () => {
   });
 
   test("answers 409 rather than a 500 when Polar says the subscription already ended", async () => {
-    const alreadyEnded = Object.assign(new Error("AlreadyCanceledSubscription"), { statusCode: 403 });
+    const alreadyEnded = Object.assign(new Error("AlreadyCanceledSubscription"), {
+      statusCode: 403,
+    });
     const { client: polar } = fakePolar(
       [sub("sub_paid", "prod_pro", { cancelAtPeriodEnd: true })],
       alreadyEnded,
@@ -527,7 +560,9 @@ describe("cancelPaidPlan", () => {
   // The case sessionPaidSubscription cannot reach: an active subscription on a product this
   // deployment has no POLAR_PRODUCT_* variable for.
   test("ends a subscription on a product this deployment cannot map to a plan", async () => {
-    const { client: polar, calls } = fakePolar([sub("sub_unmapped", "prod_from_another_environment")]);
+    const { client: polar, calls } = fakePolar([
+      sub("sub_unmapped", "prod_from_another_environment"),
+    ]);
 
     const response = await cancelPaidPlan(deps(polar));
 
@@ -557,7 +592,9 @@ describe("cancelPaidPlan", () => {
   // The same race resumePaidPlan already answers this way: the read and the write are not
   // atomic, and Polar can have ended the subscription in between.
   test("answers 409 rather than a 500 when Polar says the subscription already ended", async () => {
-    const alreadyEnded = Object.assign(new Error("AlreadyCanceledSubscription"), { statusCode: 403 });
+    const alreadyEnded = Object.assign(new Error("AlreadyCanceledSubscription"), {
+      statusCode: 403,
+    });
     const { client: polar } = fakePolar([sub("sub_paid", "prod_pro")], alreadyEnded);
 
     const response = await cancelPaidPlan(deps(polar));
@@ -618,15 +655,18 @@ describe("route handlers", () => {
       subscriptionId: "sub_victim",
       productId: "prod_ultra",
     });
-    return new Request(`${ORIGIN}/api/checkout?userId=${VICTIM_USER_ID}&externalCustomerId=${VICTIM_USER_ID}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        "x-account-id": VICTIM_USER_ID,
-        "x-workos-user-id": VICTIM_USER_ID,
+    return new Request(
+      `${ORIGIN}/api/checkout?userId=${VICTIM_USER_ID}&externalCustomerId=${VICTIM_USER_ID}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-account-id": VICTIM_USER_ID,
+          "x-workos-user-id": VICTIM_USER_ID,
+        },
+        body,
       },
-      body,
-    });
+    );
   }
 
   // /api/invoice takes a GET, so there is no form body — the victim id goes in the query
@@ -664,7 +704,8 @@ describe("route handlers", () => {
     mock.module("../lib/polar", () => ({
       ...require("../lib/polar"),
       getPolarClient: () =>
-        fakePolar(sessionSubscriptions, undefined, polarCalls, sessionOrders, sessionPendingUpdate).client,
+        fakePolar(sessionSubscriptions, undefined, polarCalls, sessionOrders, sessionPendingUpdate)
+          .client,
     }));
     // getPaymentMethod's own parsing is covered by paymentMethod.test.ts's injected fetch;
     // stubbed here so /billing's render never reaches the real `fetch` this default-less call
@@ -677,7 +718,9 @@ describe("route handlers", () => {
       getSupabaseClient: () => ({
         from: () => ({
           select: () => ({
-            eq: () => ({ maybeSingle: () => Promise.resolve({ data: accountStatusRow, error: null }) }),
+            eq: () => ({
+              maybeSingle: () => Promise.resolve({ data: accountStatusRow, error: null }),
+            }),
           }),
         }),
       }),
@@ -718,7 +761,11 @@ describe("route handlers", () => {
     expect(response.status).toBe(303);
     expect(polarCalls).toContainEqual({
       method: "checkouts.create",
-      args: { products: ["prod_max"], externalCustomerId: SESSION_USER_ID, successUrl: `${ORIGIN}/?updated=1` },
+      args: {
+        products: ["prod_max"],
+        externalCustomerId: SESSION_USER_ID,
+        successUrl: `${ORIGIN}/?updated=1`,
+      },
     });
     expect(JSON.stringify(polarCalls)).not.toContain(VICTIM_USER_ID);
     expect(JSON.stringify(polarCalls)).not.toContain("prod_ultra");
@@ -749,7 +796,10 @@ describe("route handlers", () => {
     });
     expect(polarCalls).toContainEqual({
       method: "subscriptions.update",
-      args: { id: "sub_session", subscriptionUpdate: { productId: "prod_max", prorationBehavior: "invoice" } },
+      args: {
+        id: "sub_session",
+        subscriptionUpdate: { productId: "prod_max", prorationBehavior: "invoice" },
+      },
     });
     expect(JSON.stringify(polarCalls)).not.toContain(VICTIM_USER_ID);
     expect(JSON.stringify(polarCalls)).not.toContain("sub_victim");
@@ -782,7 +832,11 @@ describe("route handlers", () => {
     expect(response.status).toBe(303);
     expect(polarCalls).toContainEqual({
       method: "checkouts.create",
-      args: { products: ["prod_max"], externalCustomerId: SESSION_USER_ID, successUrl: `${ORIGIN}/?updated=1` },
+      args: {
+        products: ["prod_max"],
+        externalCustomerId: SESSION_USER_ID,
+        successUrl: `${ORIGIN}/?updated=1`,
+      },
     });
     expect(JSON.stringify(polarCalls)).not.toContain(VICTIM_USER_ID);
     expect(JSON.stringify(polarCalls)).not.toContain("prod_ultra");
@@ -847,7 +901,11 @@ describe("route handlers", () => {
     expect(JSON.stringify(polarCalls)).not.toContain("attacker.example");
     expect(polarCalls).toContainEqual({
       method: "checkouts.create",
-      args: { products: ["prod_pro"], externalCustomerId: SESSION_USER_ID, successUrl: `${ORIGIN}/?updated=1` },
+      args: {
+        products: ["prod_pro"],
+        externalCustomerId: SESSION_USER_ID,
+        successUrl: `${ORIGIN}/?updated=1`,
+      },
     });
   });
 
@@ -991,8 +1049,12 @@ describe("route handlers", () => {
     test("degrades the invoice section to a line of text rather than a 500 when Polar fails", async () => {
       sessionSubscriptions = [sub("sub_session", "prod_pro")];
       const { client: throwingPolar } = fakePolar(sessionSubscriptions, undefined, polarCalls);
-      throwingPolar.orders.list = () => Promise.reject(Object.assign(new Error("rate limited"), { statusCode: 429 }));
-      mock.module("../lib/polar", () => ({ ...require("../lib/polar"), getPolarClient: () => throwingPolar }));
+      throwingPolar.orders.list = () =>
+        Promise.reject(Object.assign(new Error("rate limited"), { statusCode: 429 }));
+      mock.module("../lib/polar", () => ({
+        ...require("../lib/polar"),
+        getPolarClient: () => throwingPolar,
+      }));
 
       /*
        * The restore has to be in a finally. mock.module registers process-wide, so a failed
@@ -1009,7 +1071,13 @@ describe("route handlers", () => {
         mock.module("../lib/polar", () => ({
           ...require("../lib/polar"),
           getPolarClient: () =>
-            fakePolar(sessionSubscriptions, undefined, polarCalls, sessionOrders, sessionPendingUpdate).client,
+            fakePolar(
+              sessionSubscriptions,
+              undefined,
+              polarCalls,
+              sessionOrders,
+              sessionPendingUpdate,
+            ).client,
         }));
       }
     });

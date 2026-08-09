@@ -9,7 +9,9 @@ import { ACCOUNT_UPDATED, isFreshLoad, needsMarkerlessReload } from "../lib/rout
  */
 describe("the freshness marker", () => {
   test("is recognized by the reader exactly as the producers write it", () => {
-    const query = Object.fromEntries(new URL(ACCOUNT_UPDATED, "https://portal.seriora.ai").searchParams);
+    const query = Object.fromEntries(
+      new URL(ACCOUNT_UPDATED, "https://portal.seriora.ai").searchParams,
+    );
 
     expect(isFreshLoad(query)).toBe(true);
   });

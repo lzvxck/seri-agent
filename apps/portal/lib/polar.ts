@@ -24,7 +24,10 @@ export function polarStatusCode(error: unknown): number | undefined {
 }
 
 // Polar answers a missing customer with 404; anything else is a real failure.
-export async function getCustomerState(polar: Polar, userId: string): Promise<CustomerState | null> {
+export async function getCustomerState(
+  polar: Polar,
+  userId: string,
+): Promise<CustomerState | null> {
   try {
     return await polar.customers.getStateExternal({ externalId: userId });
   } catch (error) {

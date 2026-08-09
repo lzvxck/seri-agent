@@ -1,6 +1,13 @@
 import type { Polar } from "@polar-sh/sdk";
 import type { SubscriptionUpdate } from "@polar-sh/sdk/models/components/subscriptionupdate";
-import { type ProductEnv, isPaidPlan, isUpgrade, planForProductId, productIdForPlan, toPlan } from "@seri/plans";
+import {
+  type ProductEnv,
+  isPaidPlan,
+  isUpgrade,
+  planForProductId,
+  productIdForPlan,
+  toPlan,
+} from "@seri/plans";
 import { getCustomerState, polarStatusCode } from "./polar";
 import { ACCOUNT_UPDATED } from "./routes";
 import {
@@ -69,7 +76,8 @@ function scheduledToCancel(subscriptions: ActiveSubscription[]): boolean {
 // createCheckout is only ever reached from the plans page's own checkout form, so "here" is
 // where the customer already is — unlike the Manage billing button this used to name, which
 // is gone from every page but the past-due banner.
-const ALREADY_PAID = "This account already has a paid subscription; change it from the plans above.";
+const ALREADY_PAID =
+  "This account already has a paid subscription; change it from the plans above.";
 
 async function sessionPaidSubscription(deps: BillingDeps) {
   // Found from the session's external id, never from a subscription id in the request, and
@@ -78,7 +86,11 @@ async function sessionPaidSubscription(deps: BillingDeps) {
   return paidSubscription(state?.activeSubscriptions ?? [], deps.products);
 }
 
-async function applyUpdate(deps: BillingDeps, id: string, update: SubscriptionUpdate): Promise<Response> {
+async function applyUpdate(
+  deps: BillingDeps,
+  id: string,
+  update: SubscriptionUpdate,
+): Promise<Response> {
   try {
     await deps.polar.subscriptions.update({ id, subscriptionUpdate: update });
   } catch (error) {
@@ -148,9 +160,12 @@ export async function changePlan(deps: BillingDeps, plan: unknown): Promise<Resp
 
   const current = await sessionPaidSubscription(deps);
   if (!current) {
-    return new Response("No paid subscription to change; upgrading from free goes through checkout.", {
-      status: 409,
-    });
+    return new Response(
+      "No paid subscription to change; upgrading from free goes through checkout.",
+      {
+        status: 409,
+      },
+    );
   }
 
   /*

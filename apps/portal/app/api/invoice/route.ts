@@ -22,5 +22,8 @@ export async function GET(request: Request): Promise<Response> {
   const owned = (await listOrders(polar, userId)).some((order) => order.id === orderId);
   if (!owned) return new Response("Not found.", { status: 404 });
 
-  return new Response(null, { status: 303, headers: { Location: await invoiceUrl(polar, orderId) } });
+  return new Response(null, {
+    status: 303,
+    headers: { Location: await invoiceUrl(polar, orderId) },
+  });
 }

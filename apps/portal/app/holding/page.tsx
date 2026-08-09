@@ -12,7 +12,5 @@ import { ComingSoon } from "@seri/ui";
  * rewritten `/`, /billing and /usage render it.
  */
 export default function Holding() {
-  return (
-    <ComingSoon wordmark="Seriora Portal" line="Plans and billing for seri." />
-  );
+  return <ComingSoon wordmark="Seriora Portal" line="Plans and billing for seri." />;
 }

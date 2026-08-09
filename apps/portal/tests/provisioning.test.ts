@@ -18,7 +18,9 @@ type Filter = { column: keyof ClaimRow; op: "eq" | "lt"; value: string };
 
 function matches(row: ClaimRow, filters: Filter[]): boolean {
   // ISO-8601 UTC sorts lexicographically, which is what makes `lt` on claimed_at work here.
-  return filters.every((f) => (f.op === "eq" ? row[f.column] === f.value : row[f.column] < f.value));
+  return filters.every((f) =>
+    f.op === "eq" ? row[f.column] === f.value : row[f.column] < f.value,
+  );
 }
 
 /*
@@ -29,8 +31,12 @@ function matches(row: ClaimRow, filters: Filter[]): boolean {
 function claimQuery(run: (filters: Filter[]) => ClaimRow[]) {
   const filters: Filter[] = [];
   const builder = {
-    eq: (column: keyof ClaimRow, value: string) => (filters.push({ column, op: "eq", value }), builder),
-    lt: (column: keyof ClaimRow, value: string) => (filters.push({ column, op: "lt", value }), builder),
+    eq: (column: keyof ClaimRow, value: string) => (
+      filters.push({ column, op: "eq", value }), builder
+    ),
+    lt: (column: keyof ClaimRow, value: string) => (
+      filters.push({ column, op: "lt", value }), builder
+    ),
     select: () => Promise.resolve({ data: run(filters), error: null }),
     then: (resolve: (result: unknown) => void) => resolve({ data: run(filters), error: null }),
   };
@@ -42,7 +48,10 @@ function claimQuery(run: (filters: Filter[]) => ClaimRow[]) {
  * in for the primary key, and the check-and-set inside `select()` runs synchronously, so two
  * concurrent callers cannot both insert — exactly what the unique constraint guarantees.
  */
-function fakeSupabase(row: Record<string, unknown> | null, claims: Map<string, ClaimRow> = new Map()) {
+function fakeSupabase(
+  row: Record<string, unknown> | null,
+  claims: Map<string, ClaimRow> = new Map(),
+) {
   const filters: { table: string; column: string; value: unknown }[] = [];
   const client = {
     from: (table: string) => {
@@ -63,10 +72,15 @@ function fakeSupabase(row: Record<string, unknown> | null, claims: Map<string, C
           select: () => {
             // A plain upsert would overwrite the winner's claim instead of reporting the
             // conflict, so the fake refuses to model anything but ON CONFLICT DO NOTHING.
-            if (!options?.ignoreDuplicates) throw new Error("claim insert must use ignoreDuplicates");
+            if (!options?.ignoreDuplicates)
+              throw new Error("claim insert must use ignoreDuplicates");
             const id = values.workos_user_id;
             if (claims.has(id)) return Promise.resolve({ data: [], error: null });
-            claims.set(id, { workos_user_id: id, state: "pending", claimed_at: new Date().toISOString() });
+            claims.set(id, {
+              workos_user_id: id,
+              state: "pending",
+              claimed_at: new Date().toISOString(),
+            });
             return Promise.resolve({ data: [{ workos_user_id: id }], error: null });
           },
         }),
@@ -93,7 +107,11 @@ type FakeState = { activeSubscriptions: ActiveSubscription[] } | null;
 const PERIOD_END = new Date("2026-09-04T00:00:00Z");
 
 // Renewing, not winding down, unless a test says otherwise.
-function sub(id: string, productId: string, overrides: Partial<ActiveSubscription> = {}): ActiveSubscription {
+function sub(
+  id: string,
+  productId: string,
+  overrides: Partial<ActiveSubscription> = {},
+): ActiveSubscription {
   return {
     id,
     productId,
@@ -162,12 +180,19 @@ function fakePolar(
 
 describe("ensureProvisioned", () => {
   test("returns the stored plan without touching Polar when the row is active and mapped", async () => {
-    const { client: supabase, filters } = fakeSupabase({ plan: "max", subscription_status: "active" });
+    const { client: supabase, filters } = fakeSupabase({
+      plan: "max",
+      subscription_status: "active",
+    });
     const { client: polar, calls } = fakePolar([]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("max");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "max",
+    );
     expect(calls).toEqual([]);
-    expect(filters).toEqual([{ table: "account_status", column: "workos_user_id", value: USER.userId }]);
+    expect(filters).toEqual([
+      { table: "account_status", column: "workos_user_id", value: USER.userId },
+    ]);
   });
 
   /*
@@ -176,12 +201,17 @@ describe("ensureProvisioned", () => {
    * with no end date and no Resume, as though the cancellation had not happened.
    */
   test("ignores the stored row entirely when the caller has just changed plan", async () => {
-    const { client: supabase, filters } = fakeSupabase({ plan: "pro", subscription_status: "active" });
+    const { client: supabase, filters } = fakeSupabase({
+      plan: "pro",
+      subscription_status: "active",
+    });
     const { client: polar, calls } = fakePolar([
       { activeSubscriptions: [sub("sub_1", "prod_pro", { cancelAtPeriodEnd: true })] },
     ]);
 
-    const result = await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER, { fresh: true });
+    const result = await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER, {
+      fresh: true,
+    });
 
     expect(result.scheduled).toEqual({ kind: "ends", plan: "free", at: PERIOD_END });
     expect(calls.some((call) => call.method === "customers.getStateExternal")).toBe(true);
@@ -199,10 +229,15 @@ describe("ensureProvisioned", () => {
    * race or displace what they bought.
    */
   test("never provisions on a fresh load that finds nothing, since the customer may have just paid", async () => {
-    const { client: supabase, claims } = fakeSupabase({ plan: "free", subscription_status: "active" });
+    const { client: supabase, claims } = fakeSupabase({
+      plan: "free",
+      subscription_status: "active",
+    });
     const { client: polar, calls } = fakePolar([{ activeSubscriptions: [] }]);
 
-    const result = await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER, { fresh: true });
+    const result = await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER, {
+      fresh: true,
+    });
 
     expect(calls.some((call) => call.method === "subscriptions.create")).toBe(false);
     expect(claims.size).toBe(0);
@@ -219,7 +254,9 @@ describe("ensureProvisioned", () => {
     const { client: supabase } = fakeSupabase({ plan: "pro", subscription_status: "revoked" });
     const { client: polar } = fakePolar([{ activeSubscriptions: [] }]);
 
-    const result = await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER, { fresh: true });
+    const result = await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER, {
+      fresh: true,
+    });
 
     expect(result).toEqual({ plan: null, scheduled: null, renewsAt: null, amount: null });
   });
@@ -236,7 +273,9 @@ describe("ensureProvisioned", () => {
       const { client: supabase } = fakeSupabase({ plan: "pro", subscription_status: status });
       const { client: polar, calls } = fakePolar([{ activeSubscriptions: [] }]);
 
-      expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("free");
+      expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+        "free",
+      );
       expect(calls.map((call) => call.method)).toEqual([
         "customers.getStateExternal",
         "subscriptions.create",
@@ -252,7 +291,9 @@ describe("ensureProvisioned", () => {
     const { client: supabase } = fakeSupabase({ plan: null, subscription_status: "active" });
     const { client: polar } = fakePolar([{ activeSubscriptions: [sub("sub_1", "prod_max")] }]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("max");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "max",
+    );
   });
 
   test("creates nothing when Polar already has the customer and an active subscription", async () => {
@@ -261,7 +302,9 @@ describe("ensureProvisioned", () => {
       { activeSubscriptions: [sub("sub_1", "prod_free")] },
     ]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("free");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "free",
+    );
     expect(calls.map((call) => call.method)).toEqual(["customers.getStateExternal"]);
   });
 
@@ -271,7 +314,9 @@ describe("ensureProvisioned", () => {
     const { client: supabase } = fakeSupabase(null);
     const { client: polar } = fakePolar([{ activeSubscriptions: [sub("sub_1", "prod_pro")] }]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("pro");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "pro",
+    );
   });
 
   /*
@@ -282,14 +327,13 @@ describe("ensureProvisioned", () => {
     const { client: supabase } = fakeSupabase(null);
     const { client: polar } = fakePolar([
       {
-        activeSubscriptions: [
-          sub("sub_free", "prod_free"),
-          sub("sub_paid", "prod_ultra"),
-        ],
+        activeSubscriptions: [sub("sub_free", "prod_free"), sub("sub_paid", "prod_ultra")],
       },
     ]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("ultra");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "ultra",
+    );
   });
 
   /*
@@ -303,10 +347,15 @@ describe("ensureProvisioned", () => {
       { activeSubscriptions: [sub("sub_free", "prod_free"), sub("sub_paid", "prod_pro")] },
     ]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("pro");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "pro",
+    );
     // The second read is the price of `pending_update` not being in the customer-state
     // payload. Nothing is written, which is what this test is about.
-    expect(calls.map((call) => call.method)).toEqual(["customers.getStateExternal", "subscriptions.get"]);
+    expect(calls.map((call) => call.method)).toEqual([
+      "customers.getStateExternal",
+      "subscriptions.get",
+    ]);
   });
 
   /*
@@ -317,10 +366,14 @@ describe("ensureProvisioned", () => {
    */
   test("reports a booked downgrade, which only the second read can see", async () => {
     const { client: supabase } = fakeSupabase(null);
-    const { client: polar } = fakePolar([{ activeSubscriptions: [sub("sub_paid", "prod_max")] }], undefined, {
-      productId: "prod_pro",
-      appliesAt: PERIOD_END,
-    });
+    const { client: polar } = fakePolar(
+      [{ activeSubscriptions: [sub("sub_paid", "prod_max")] }],
+      undefined,
+      {
+        productId: "prod_pro",
+        appliesAt: PERIOD_END,
+      },
+    );
 
     expect(await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).toEqual({
       plan: "max",
@@ -353,12 +406,18 @@ describe("ensureProvisioned", () => {
   // product at all. Reporting a destination would mean inventing a label for it.
   test("reports nothing scheduled when the pending product cannot be named", async () => {
     const { client: supabase } = fakeSupabase(null);
-    const { client: polar } = fakePolar([{ activeSubscriptions: [sub("sub_paid", "prod_max")] }], undefined, {
-      productId: "prod_from_another_environment",
-      appliesAt: PERIOD_END,
-    });
+    const { client: polar } = fakePolar(
+      [{ activeSubscriptions: [sub("sub_paid", "prod_max")] }],
+      undefined,
+      {
+        productId: "prod_from_another_environment",
+        appliesAt: PERIOD_END,
+      },
+    );
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).scheduled).toBeNull();
+    expect(
+      (await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).scheduled,
+    ).toBeNull();
   });
 
   /*
@@ -444,7 +503,9 @@ describe("ensureProvisioned", () => {
       { activeSubscriptions: [sub("sub_x", "prod_from_another_environment")] },
     ]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBeNull();
+    expect(
+      (await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan,
+    ).toBeNull();
     expect(calls.map((call) => call.method)).toEqual(["customers.getStateExternal"]);
   });
 
@@ -452,7 +513,9 @@ describe("ensureProvisioned", () => {
     const { client: supabase } = fakeSupabase(null);
     const { client: polar, calls } = fakePolar([null]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("free");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "free",
+    );
     expect(calls.map((call) => call.method)).toEqual([
       "customers.getStateExternal",
       "customers.create",
@@ -464,9 +527,14 @@ describe("ensureProvisioned", () => {
 
   test("treats a duplicate customer from a concurrent first visit as success", async () => {
     const { client: supabase } = fakeSupabase(null);
-    const { client: polar, calls } = fakePolar([null, { activeSubscriptions: [] }], "customers.create");
+    const { client: polar, calls } = fakePolar(
+      [null, { activeSubscriptions: [] }],
+      "customers.create",
+    );
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("free");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "free",
+    );
     expect(calls.filter((call) => call.method === "customers.create")).toHaveLength(1);
     expect(calls.at(-1)?.method).toBe("subscriptions.create");
   });
@@ -480,7 +548,10 @@ describe("ensureProvisioned", () => {
    */
   test("releases the claim and propagates when creating the subscription fails", async () => {
     const { client: supabase, claims } = fakeSupabase(null);
-    const { client: polar } = fakePolar([null, { activeSubscriptions: [] }], "subscriptions.create");
+    const { client: polar } = fakePolar(
+      [null, { activeSubscriptions: [] }],
+      "subscriptions.create",
+    );
 
     await expect(ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).rejects.toThrow(
       "polar responded 409",
@@ -502,7 +573,10 @@ describe("ensureProvisioned", () => {
 
   test("surfaces a subscription-create error that was not a race", async () => {
     const { client: supabase } = fakeSupabase(null);
-    const { client: polar } = fakePolar([null, { activeSubscriptions: [] }], "subscriptions.create");
+    const { client: polar } = fakePolar(
+      [null, { activeSubscriptions: [] }],
+      "subscriptions.create",
+    );
 
     await expect(ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).rejects.toThrow(
       "polar responded 409",
@@ -576,7 +650,10 @@ describe("ensureProvisioned under concurrent renders", () => {
   // means create nothing and report Free.
   test("a render that loses the claim creates nothing and still reports free", async () => {
     const held = new Map([
-      ["user_01H", { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() }],
+      [
+        "user_01H",
+        { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() },
+      ],
     ]);
     const { client: supabase } = fakeSupabase(null, held);
     const { client: polar, creates } = fanOutPolar();
@@ -594,12 +671,17 @@ describe("ensureProvisioned under concurrent renders", () => {
   // than the assumed free.
   test("a loser reports what Polar shows if the winner's subscription has already landed", async () => {
     const held = new Map([
-      ["user_01H", { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() }],
+      [
+        "user_01H",
+        { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() },
+      ],
     ]);
     const { client: supabase } = fakeSupabase(null, held);
     const { client: polar, creates } = fanOutPolar([sub("sub_paid", "prod_max")]);
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("max");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "max",
+    );
     expect(creates()).toBe(0);
   });
 
@@ -621,7 +703,9 @@ describe("ensureProvisioned under concurrent renders", () => {
     const { client: supabase } = fakeSupabase(null, stale);
     const { client: polar, creates } = fanOutPolar();
 
-    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe("free");
+    expect((await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER)).plan).toBe(
+      "free",
+    );
     expect(creates()).toBe(1);
   });
 

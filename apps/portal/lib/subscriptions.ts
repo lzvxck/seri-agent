@@ -49,7 +49,10 @@ export function holdsOnlyFree(subscriptions: ActiveSubscription[], env: ProductE
   return subscriptions.every((s) => planForProductId(s.productId, env) === "free");
 }
 
-function freeSubscription(subscriptions: ActiveSubscription[], env: ProductEnv): ActiveSubscription | null {
+function freeSubscription(
+  subscriptions: ActiveSubscription[],
+  env: ProductEnv,
+): ActiveSubscription | null {
   return subscriptions.find((s) => planForProductId(s.productId, env) === "free") ?? null;
 }
 

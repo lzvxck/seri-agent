@@ -41,7 +41,9 @@ const NEXT_DIR = join(WEB_DIR, ".next");
  * ("- Local: http://localhost:<port>") rather than exposing it programmatically, so it is read
  * off stdout — measured against the real CLI output on this Next version, not assumed.
  */
-async function startNext(env: Record<string, string>): Promise<{ port: number; proc: Bun.Subprocess }> {
+async function startNext(
+  env: Record<string, string>,
+): Promise<{ port: number; proc: Bun.Subprocess }> {
   const proc = Bun.spawn({
     cmd: [process.execPath, "x", "next", "start", "-p", "0"],
     cwd: WEB_DIR,
@@ -92,7 +94,12 @@ function extractActionForm(html: string): { action: string; fields: [string, str
 
   const actionMatch = form.match(/\baction="([^"]*)"/);
   const decode = (s: string) =>
-    s.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    s
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;/g, "'")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">");
 
   const fields: [string, string][] = [];
   const inputRe = /<input\s+type="hidden"\s+name="(\$ACTION[^"]*)"(?:\s+value="([^"]*)")?\s*\/?>/g;

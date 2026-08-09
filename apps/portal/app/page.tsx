@@ -26,7 +26,9 @@ function tierCopy(plan: Plan) {
   return {
     name: TIER_NAME[plan],
     price,
-    detail: isPaidPlan(plan) ? `$${price * INCLUDED_SPEND_RATIO}/mo of included usage` : "Zero-cost models only",
+    detail: isPaidPlan(plan)
+      ? `$${price * INCLUDED_SPEND_RATIO}/mo of included usage`
+      : "Zero-cost models only",
   };
 }
 
@@ -86,15 +88,17 @@ export default async function AccountPage({
               heading: `${TIER_NAME[plan]} until ${formatDate(scheduled.at)}, then ${TIER_NAME[scheduled.plan]}.`,
               blurb: `You keep ${TIER_NAME[plan]} for the period you have already paid for, and move to ${TIER_NAME[scheduled.plan]} on ${formatDate(scheduled.at)} — nothing is charged in between. Pick another plan to change where you land, or ${TIER_NAME[plan]} again to call the change off.`,
             }
-        : {
-            heading: `You're on ${TIER_NAME[plan]}.`,
-            blurb:
-              "Bring your own key stays free forever and needs no account at all. These plans exist for the hosted option, where seri manages the keys and you pay for the upstream usage you actually make.",
-          };
+          : {
+              heading: `You're on ${TIER_NAME[plan]}.`,
+              blurb:
+                "Bring your own key stays free forever and needs no account at all. These plans exist for the hosted option, where seri manages the keys and you pay for the upstream usage you actually make.",
+            };
 
   return (
     <Shell email={user.email} current="account">
-      <h1 className="text-[38px] leading-[1.1] font-bold tracking-[-1px] md:text-display">{heading}</h1>
+      <h1 className="text-[38px] leading-[1.1] font-bold tracking-[-1px] md:text-display">
+        {heading}
+      </h1>
       <p className="mt-11 max-w-[62ch] text-ink-subtle md:mt-16 md:text-[16px]/[1.4]">{blurb}</p>
 
       {/* Resume is our own route — Polar's customer portal offers no control for it, which is
