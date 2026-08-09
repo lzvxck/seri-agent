@@ -27,6 +27,10 @@ Last reconciled against the repo: 2026-08-09.
 
 **Stage B is now fully shipped** (B1 + the Windows config-root relocation to `~/.seri`, PR #56 + B2).
 
+**11a follow-ups (post-merge):** PR #62 fixed the user's own submitted input not being echoed into
+the TUI transcript. PR #63 investigated a separate Windows TUI feedback-delay symptom —
+**inconclusive, no fix landed**; needs a live pty repro on Git Bash/MINGW64, not just WSL2/Linux.
+
 ## Remaining, in execution order
 
 | # | Stage | State | Why here |
