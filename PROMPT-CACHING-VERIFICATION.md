@@ -7,7 +7,7 @@ which raised the question of whether seri has ever actually confirmed prompt cac
 *happening*, not just that the code is *shaped* to price it correctly if it does. Answer: **no —
 Groq's documented automatic caching does not observably work for the model seri defaults to.**
 See "Live verification results" below. This finding is part of why seri is moving off Groq as a
-provider — see `OPENROUTER-PROVIDER-PINNING.md`.
+provider — tracked as a separate, not-yet-started design doc (not included in this change).
 
 Goal: a real test (or manual, recorded check) that confirms seri's prompt architecture is actually
 getting cache hits from at least one live provider, not just that the architecture *could* support it.
@@ -37,7 +37,9 @@ negative:
   between Groq's documented caching behavior and what actually happens for GPT-OSS models today.
 
 **OpenRouter (`openai/gpt-4o-mini`) — CONFIRMED, conditionally.** Raw `curl` directly against
-OpenRouter's API (not committed as seri code — see `OPENROUTER-PROVIDER-PINNING.md` for why):
+OpenRouter's API — an ad-hoc investigation, not committed as seri code (implementing this in
+production requires provider-routing pinning seri doesn't have; that's a real feature, not a
+verification step, and is out of this change's scope):
 - Default (unpinned) routing: two identical-prefix calls both showed `cached_tokens: 0` AND
   `cache_write_tokens: 0` — the cache was never even written, consistent with requests landing on
   different backend pools each time.
@@ -46,11 +48,13 @@ OpenRouter's API (not committed as seri code — see `OPENROUTER-PROVIDER-PINNIN
   after) `cached_tokens: 1408` of `prompt_tokens: 1542`. Reproducible, real cache hit.
 - Caveat: this specific pin (`order: ["openai"]`) works because `openai/gpt-4o-mini`'s model-slug
   prefix happens to equal its one real provider. It does not generalize to models served by
-  multiple backends. Follow-up tracked in `OPENROUTER-PROVIDER-PINNING.md`.
+  multiple backends (Llama/Qwen/DeepSeek-style models route through several possible upstream
+  providers whose names don't match the model slug) — a real design gap, not yet addressed.
 
 ---
 
 ## What already exists (the architecture, not the proof)
+*(historical design input — superseded by "Live verification results" above)*
 
 - **Stage B2** (`apps/cli/src/agents/systemPrompt.ts`, PR #58) splits the system prompt into ordered
   **stable → context → volatile** tiers specifically so a stable prefix survives across turns —
@@ -66,6 +70,8 @@ OpenRouter's API (not committed as seri code — see `OPENROUTER-PROVIDER-PINNIN
   *assert* caching is occurring.
 
 ## What's missing
+*(historical design input — superseded by "Live verification results" above; the test and check
+described below now exist)*
 
 A test or recorded manual check that, against a real provider:
 1. Sends two turns in the same session where the stable+context prefix is identical between them.
@@ -84,9 +90,10 @@ A test or recorded manual check that, against a real provider:
   of what its docs say, pending Groq or the upstream issue tracker resolving
   `BerriAI/litellm#16129`.
 - Whether this is testable at all without a live API key in CI: no — it lives as the opt-in,
-  skip-by-default test `apps/cli/tests/provider/promptCaching.live.test.ts`
-  (`SERI_DISABLE_MODELS_FETCH`-style pattern, gated on `GROQ_API_KEY` +
-  `SERI_LIVE_CACHE_CHECK=1`), matching the original suspicion.
+  skip-by-default test `apps/cli/tests/provider/promptCaching.live.test.ts` (a plain
+  `test.skipIf` gated on `GROQ_API_KEY` + `SERI_LIVE_CACHE_CHECK=1`, simpler than
+  `catalog.test.ts`'s save/restore idiom since this test never mutates either env var),
+  matching the original suspicion.
 - Token-count vs. latency signal: token count
   (`usage.inputTokenDetails.cacheReadTokens`/OpenRouter's `prompt_tokens_details.cached_tokens`),
   confirmed as the right call — it's what both providers report directly, no proxy needed.
