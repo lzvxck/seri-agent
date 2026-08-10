@@ -48,10 +48,14 @@ Live verification (research spec, raw `curl` against OpenRouter's API): `openai/
 `cached_tokens: 0`; turn 2 (warm) `cached_tokens: 1408` of `1528` prompt tokens. Clean hit, no
 other observed side effects.
 
-*Orchestrator: fill in the implementing loop's own live-verification numbers here once
-`apps/cli/tests/provider/openrouterCaching.live.test.ts` has been run against a real
-`OPENROUTER_API_KEY` (`SERI_LIVE_CACHE_CHECK=1 OPENROUTER_API_KEY=... bun test
-apps/cli/tests/provider/openrouterCaching.live.test.ts`).*
+**Live verification, this implementation (2026-08-10)**: ran
+`apps/cli/tests/provider/openrouterCaching.live.test.ts` against a real `OPENROUTER_API_KEY` —
+`1 pass / 0 fail`. Also ran the exact production code path directly (`getOpenRouterModel`,
+`streamText`, two turns, same nonce-prefixed prompt) to capture the real numbers behind that
+pass: `openai/gpt-4o-mini`, turn 1 `cachedTokens: 0` (2023 prompt tokens, cost $0.00030465);
+turn 2 `cachedTokens: 1920` of `2023` prompt tokens (cost $0.00016065 — a ~47% reduction on that
+call). Confirms the shipped code, not just the raw-`curl` proof-of-concept from the research
+loop, produces a real cache hit.
 
 The research also found `session_id` alone does **not** reliably achieve backend consistency for
 multi-backend open-weight models (e.g. `meta-llama/llama-3.3-70b-instruct`, 13 real upstream
