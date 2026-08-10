@@ -400,7 +400,7 @@ references solve this by prompting families differently (OpenCode ships 14 promp
 injects a tool-use enforcement block for GPT/Codex only), so the catalog entry, not the model-id
 string, is where family should be recorded.
 
-### 7a — the gateway (before Stage 6)
+### 7a — the gateway (before Stage 6)  ·  **done**
 OpenRouter breadth tier; mid-session model switching with context preserved *[Crush #1]*;
 Catwalk-style catalog. Nothing here needs subagents, and three things are waiting on it: billing
 Phase B, the spend cap, and the portal's usage surface.
@@ -431,6 +431,13 @@ Phase B, the spend cap, and the portal's usage surface.
 
 **Verify:** model switches mid-session without context loss; a run's dollar cost is reported with
 its provenance, and a cost tagged `estimated` is visibly distinguishable from one tagged `actual`.
+**Both confirmed live, 2026-08-09** (a consolidated fix round after review, not the original slices
+alone): a real OpenRouter call returned `(cost: $0.0001)` — no `~`/`(estimated)` marker, `status:
+"actual"`, `source: "provider_cost_api"` — and a real Groq call against the same code path returned
+`(cost: ~$0.0007 (estimated))` — computed from the catalog's own pricing, `status: "estimated"`,
+`source: "provider_models_api"` — the visibly-distinguishable pair this line asks for. Mid-session
+switching with context preserved is `tests/tui/tuiPty.test.ts`'s own "switching the model via
+/model..." test, run on a real pty against the real picker.
 
 ### 7b — routing of roles (after Stage 6)
 Architect/editor split *[Aider #1]*; oracle escalation with read-only tools *[Amp #1]*.

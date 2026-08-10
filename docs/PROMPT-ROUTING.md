@@ -66,12 +66,17 @@ Ours has to teach the three-step sequence explicitly — a documented live failu
 (`.claude/loops/_archive/cli-manual-test-defects/`: *"Model passed hallucinated `content`, got
 `✓ edit done`, nothing on disk changed"*).
 
-## Open question for 7a
+## Open question for 7a — resolved
 
 Whether family detection keys off the model id string (what OpenCode does, and it is brittle across
 providers that rename — OpenRouter's `meta-llama/llama-3.3-70b-instruct` versus Groq's
-`llama-3.3-70b-versatile`) or off a field in the catalog entry. The catalog is the better home; note
-that this makes the curated manifest load-bearing for correctness, not just for presentation.
+`llama-3.3-70b-versatile`) or off a field in the catalog entry. Resolved in favor of the catalog
+entry: `ModelCatalogEntry.family` (`packages/model-catalog/src/types.ts`) carries models.dev's own
+`family` field verbatim, curated into every catalog entry regardless of provider, so a
+prompt-per-family table keys on `family` rather than parsing (and keeping in sync with) each
+provider's own id string. This makes the curated manifest load-bearing for correctness, not just for
+presentation — unchanged from the open question's own framing. Prompt-per-family routing itself is
+still not built; only the "what to key on" question is settled.
 
 ## Second thing the catalog has to carry: context window
 
