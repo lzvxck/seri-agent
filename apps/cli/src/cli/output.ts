@@ -11,6 +11,7 @@
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
 import type { LoopEvent } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
+import type { DispatchResult } from "../subagents/dispatch";
 import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
@@ -203,11 +204,38 @@ function verificationSuffix(verification: CheckOutcome): string {
 // The verification suffix is NOT named that way: the narrowing belongs to the module that
 // produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the only
 // tool name here.
+// `DispatchResult` above is a type-only import, so nothing from subagents/ is actually loaded at
+// runtime — this file already type-imports the heavier loop.ts for LoopEvent (above) the same way,
+// so the header comment's "keep imports dependency-free" rule is about VALUE imports, not this one.
+// Still narrowed rather than trusted outright: `result` is `unknown` on the wire (loop.ts types
+// every tool result that way), so the cast is a shape assertion, not a guarantee.
+function dispatchSummary(
+  result: unknown,
+): { ran: number; total: number; tokens: number | undefined } | undefined {
+  const value = result as Partial<DispatchResult> | undefined;
+  if (!Array.isArray(value?.results)) return undefined;
+  const ran = value.results.filter((r) => r.doneReason !== undefined).length;
+  const tokens = value.totalUsage?.totalTokens;
+  return {
+    ran,
+    total: value.results.length,
+    tokens: typeof tokens === "number" ? tokens : undefined,
+  };
+}
+
 export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }>): string {
+  if (event.name === "edit") return "✓ edit done (text returned, nothing written)";
+  const dispatch = event.name === "dispatch_subagents" ? dispatchSummary(event.result) : undefined;
+  if (dispatch !== undefined) {
+    const tokens = dispatch.tokens === undefined ? "" : `, ${dispatch.tokens} tokens`;
+    const tasks =
+      dispatch.ran === dispatch.total
+        ? `${dispatch.total} ${dispatch.total === 1 ? "task" : "tasks"}`
+        : `${dispatch.ran} of ${dispatch.total} tasks`;
+    return `✓ dispatch_subagents done (${tasks}${tokens})`;
+  }
   const verification = writeFileVerification(event.result);
-  return event.name === "edit"
-    ? "✓ edit done (text returned, nothing written)"
-    : `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;
+  return `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;
 }
 
 // Printed because a grant the user cannot see is a grant they cannot revoke. This string is still

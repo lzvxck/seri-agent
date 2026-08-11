@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { printCost, USAGE } from "../../src/cli/output";
+import { printCost, toolResultLine, USAGE } from "../../src/cli/output";
 
 function captureLog(fn: () => void): string[] {
   const lines: string[] = [];
@@ -50,5 +50,42 @@ describe("printCost", () => {
     );
     expect(line).toBe("(cost: ≥ $0.0020, partially unknown)");
     expect(line).not.toBe("(cost: $0.0020)");
+  });
+});
+
+describe("toolResultLine", () => {
+  test("dispatch_subagents renders task count and total tokens", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: {
+        results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
+        totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      },
+    });
+    expect(line).toBe("✓ dispatch_subagents done (2 tasks, 15 tokens)");
+  });
+
+  test("dispatch_subagents omits the token clause when totalTokens is undefined", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
+    });
+    expect(line).toBe("✓ dispatch_subagents done (1 task)");
+  });
+
+  // A row with doneReason undefined never ran (batch-cap overflow, or a row this test itself just
+  // stands in for) — the count must say so instead of claiming every task ran.
+  test("dispatch_subagents renders N of M when some rows never ran", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: {
+        results: [{ doneReason: "no-tool-call" }, { doneReason: undefined }],
+        totalUsage: {},
+      },
+    });
+    expect(line).toBe("✓ dispatch_subagents done (1 of 2 tasks)");
   });
 });
