@@ -71,8 +71,10 @@ independent of the numbered stage sequence below.
 
 Subagents: named roles (`explore`/`plan`/`code`/`test`), one-level recursion limit,
 parallel-by-default with explicit serialization on shared files — plus 6b, the `archivist` role and
-persistent memory (`MEMORY.md`/`USER.md` under `~/.seri/memories/`, approval-gated writes, the
-"famous self-improving agent" piece). See `docs/BUILD-PLAN.md`'s Stage 6 section for the full
+persistent memory (three files under `~/.seri/memories/`: `USER.md` global, `MEMORY.md` global,
+`MEMORY.md` per project — corrected 2026-08-11 from an earlier two-file design, see Stage 6b — plus
+a global `~/.seri/AGENTS.md`; approval-gated writes; the "famous self-improving agent" piece). See
+`docs/BUILD-PLAN.md`'s Stage 6 section for the full
 rationale and verify bar. Two smaller, independently-scoped threads are also still open and can be
 picked up separately: Groq removal (scoped in conversation 2026-08-10, never run as a loop — seri
 is moving off Groq as a provider now that OpenRouter reaches the same models) and the hosted

@@ -257,8 +257,9 @@ memory to collide with. We have both, and the boundary has to be stated before e
 - **AGENTS.md is a human contract.** Repo-scoped, committed, nearest-in-tree *[Devin #1]*. **The
   agent never writes it.** An agent that edits its own instruction file is editing the thing that
   governs it, and the correction cannot be distinguished from drift after the fact.
-- **Memory is learned scratch.** Machine-scoped and per-project, stored outside the repository
-  (`~/.seri/memories/<project>/`), never committed, always attributed to the pass that wrote it.
+- **Memory is learned scratch.** Both machine-scoped (`USER.md`, `MEMORY.md` global) and per-project
+  (`MEMORY.md` under `~/.seri/memories/<project>/`), stored outside the repository, never committed,
+  always attributed to the pass that wrote it.
 
 The separation is the same discipline this project already enforces on itself in
 `.claude/rules/retro.md` — *retro proposes, it never applies* — and for the same reason: self-
@@ -266,23 +267,33 @@ critique from a possibly-weak model is not trustworthy enough to unsupervised-ed
 governing every future run. Anything the archivist believes belongs in the repo contract is a
 **proposal to the human**, never a write.
 
-Corollary for scope: two memory files, `MEMORY.md` per project and `USER.md` per machine. Hermes'
-split maps cleanly; only the scoping changes.
+Corollary for scope: **three** memory files, not two — **corrected 2026-08-11**. The original
+framing here ("Hermes' split maps cleanly; only the scoping changes") was wrong on the facts: Hermes'
+own `MEMORY.md` is global, not per-project (confirmed by direct source read during Stage 6 research —
+see `BUILD-PLAN.md` Stage 6b). The per-project split is real, but it is Claude Code's auto-memory
+shape, not Hermes'. Both shapes are kept rather than picking one: `USER.md` (global, identity +
+preferences), `MEMORY.md` global (cross-project environment facts and lessons, Hermes' actual shape),
+and `MEMORY.md` per project (this-repo facts and lessons, Claude Code's shape).
 
 **The full file set, once constraint #3 is admitted.** AGENTS.md is nearest-in-tree, which means
 outside a repository there is no instruction file at all — invisible while seri only does code, and
-the first thing that breaks when it does not. Four files on two axes, and the axes are what matter,
+the first thing that breaks when it does not. Five files on two axes, and the axes are what matter,
 not the count:
 
 | | **Human-authored** (contract) | **Agent-learned** (scratch) |
 |---|---|---|
 | **Per project** | `AGENTS.md`, in the repo, committed | `MEMORY.md`, outside the repo |
-| **Global** | global instruction file, machine-local | `USER.md`, machine-local |
+| **Global** | `AGENTS.md`, machine-local (same name, resolved by location — 2026-08-11) | `USER.md` + `MEMORY.md`, both machine-local |
 
 The left column is never written by the agent, in either row — §8's whole point, and it does not
 weaken just because the file is global instead of repo-scoped. The right column is written only by
-the archivist, only through the gate, always with provenance. A personality file (Hermes #11) is a
-fifth thing on neither axis, which is the argument against it.
+the archivist, only through the gate, always with provenance. The global/agent-learned cell holds
+two files rather than one because they answer different questions — `USER.md` is about the person
+(identity, preferences, working-style defaults), `MEMORY.md` is about the environment (facts and
+lessons that happen to not be tied to one repo) — the same content-type split Hermes itself keeps
+between its two files, just relocated within this table now that we know both of Hermes' files are
+global. A personality file (Hermes #11) is a sixth thing on neither axis, which is the argument
+against it.
 
 Multiply the global row by **profiles** *[Hermes #14]* and this is also how one machine runs several
 agents that genuinely differ — different learned memory, different declared instructions — rather
@@ -370,16 +381,20 @@ Client/server: one daemon owns the loop, every frontend is a client; SDK for hea
 *[OpenCode #3 / Goose #2]*. Session persist / resume / fork, `/rewind` for conversation history
 *[Gemini #1]*, checkpoints for filesystem history *[Cline #2]*. AGENTS.md at startup, nearest-in-tree
 wins *[Devin #1 / standard]* — human-written, never agent-written, with a machine-local **global
-instruction file** behind it for work outside any repository (Part II §8). Config, memory and
-sessions all hang off a **profile root** rather than one fixed home, so one machine can run several
-agents that differ in what they know *[Hermes #14]*.
+`AGENTS.md`** (same name, resolved by location — 2026-08-11) behind it for work outside any
+repository (Part II §8). Config, memory and sessions all hang off a **profile root** rather than one
+fixed home, so one machine can run several agents that differ in what they know *[Hermes #14]*.
 
-Memory: two capped files outside the repo — `MEMORY.md` per project, `USER.md` per machine — written
-through a write-only `add`/`replace`/`remove` tool that **hard-fails on overflow** rather than
-auto-compacting, scanned for injection on write, and frozen for the duration of a session so the
-provider prefix cache survives *[Hermes #1/#2/#3/#6]*. Writes stage to a reviewable inbox by
-default *[Gemini #2 / Claude Code #5 / Hermes #5, default inverted]*. The system prompt assembles in
-ordered tiers — **stable → context → volatile** — which is what makes that caching hold.
+Memory: **three** capped files outside the repo, not two — `USER.md` (global, identity/preferences),
+`MEMORY.md` global (cross-project environment facts/lessons — this is Hermes' actual `MEMORY.md`
+shape, corrected 2026-08-11 from an earlier per-project mis-attribution), and `MEMORY.md` per
+project (Claude Code's auto-memory shape). All three written through the same write-only
+`add`/`replace`/`remove` tool (a `scope` parameter selects which file) that **hard-fails on
+overflow** rather than auto-compacting, scanned for injection on write, and frozen for the duration
+of a session so the provider prefix cache survives *[Hermes #1/#2/#3/#6]*. Writes stage to a
+reviewable inbox by default *[Gemini #2 / Claude Code #5 / Hermes #5, default inverted]*. The system
+prompt assembles in ordered tiers — **stable → context → volatile** — which is what makes that
+caching hold.
 
 ### Layer 8 — Extensibility
 One artifact format (recipe: instructions + extensions + parameters + prompt) *[Goose #1 / Windsurf #1

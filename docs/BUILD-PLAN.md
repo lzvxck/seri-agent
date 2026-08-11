@@ -13,7 +13,7 @@ the way Claude Code ships as `claude`.) Renamed from Hesper Code on 2026-08-04.
 | Safety layering | Gate-first; OS sandbox is an upgrade tier, not the base | Part IV |
 | Platforms | Windows, macOS, Linux — natively, no WSL2/Docker prerequisite | Constraint #2 |
 | Shell | Two tools (`bash`, `powershell`), no translation between them | Part IV |
-| Instruction file | AGENTS.md, nearest-in-tree wins; global file behind it | Layer 7 / Part II §8 |
+| Instruction file | AGENTS.md, nearest-in-tree wins; a global `~/.seri/AGENTS.md` behind it (same name, resolved by location) | Layer 7 / Part II §8 |
 | Product scope | **Code-first, not code-only** — v0.1.0 ships as a coding agent; assistant work is a post-release arc | Constraint #3 |
 
 ## Scope: what "code-first, not code-only" changes in this plan
@@ -219,8 +219,9 @@ Two decisions to record while touching this, neither of them built here
 
 - **AGENTS.md is a human contract the agent never writes.** Memory is learned scratch, stored
   outside the repo, written only by the archivist through the gate.
-- **A global instruction file sits behind AGENTS.md**, machine-local, per profile, for work outside
-  any repository. It loads into the *context* tier, below AGENTS.md when both exist. Under
+- **A global `AGENTS.md` sits behind the project one** (named 2026-08-11 — same filename, resolved
+  by location, not a second name — see Stage 6b), machine-local, per profile, for work outside any
+  repository. It loads into the *context* tier, below the project `AGENTS.md` when both exist. Under
   constraint #3 this is the file that keeps seri coherent when there is no repo at all — invisible
   today, load-bearing the moment Stage 8 lands.
 
@@ -367,11 +368,37 @@ Sequenced here rather than as its own stage because it is not new machinery: a p
 pass **is** an isolated context with a restricted toolset, which is exactly what Stage 6 builds. It
 lands after the four task roles work, in the same stage.
 
-- **Memory store.** `MEMORY.md` per project (~2,200 chars) and `USER.md` per machine (~1,375),
-  under `~/.seri/memories/`, never in the repo. Write-only tool (`add` / `replace` / `remove` by
-  substring — no `read`, it is already in the prompt). **Overflow hard-fails** with the overage and
-  a demand to consolidate in the same turn; it never auto-drops entries. Budget percentage is
-  rendered into the volatile tier so the model sees the pressure.
+- **Memory store — three files, not two.** **Corrected 2026-08-11:** Hermes' own `MEMORY.md` is
+  global (per profile), not per-project — the earlier text here mis-attributed a per-project design
+  to Hermes. The per-project split is real and worth keeping (it is Claude Code's own auto-memory
+  pattern, not Hermes'), so both shapes ship rather than picking one:
+  - `USER.md` — global (per machine/profile), ~1,375 chars. Identity, communication preferences,
+    technical skill level, and *default* working-style preferences that hold across every project
+    unless a specific project overrides them.
+  - `MEMORY.md` (global) — per machine/profile, ~2,200 chars. Cross-project environment facts and
+    lessons not tied to any one repository (Hermes' actual shape and cap for its `MEMORY.md`).
+  - `MEMORY.md` (per project) — one per repository, ~2,200 chars, keyed by `projectKey` (Claude
+    Code's own auto-memory shape: per-project, hard load cap, consolidate-on-overflow). Repo
+    conventions, build/test commands, tool quirks, lessons specific to that one codebase — including
+    any case where a project's own requirement overrides a `USER.md` default (the override is
+    recorded here, `USER.md` is never edited to carve out the exception).
+  All three live under `~/.seri/memories/` (global files directly under it, per-project files under
+  `~/.seri/memories/<projectToken>/`), never in the repo. Boundary rule for the archivist: *a
+  preference is `USER.md` unless it is stated as, or enforced as, a requirement of one specific
+  repository — repo requirements go in that repo's `MEMORY.md` even when phrased as a preference.*
+  One write-only tool (`add` / `replace` / `remove` by substring — no `read`, it is already in the
+  prompt) taking a `scope: "user" | "memory-global" | "memory-project"` parameter, not three separate
+  tools. **Overflow hard-fails** with the overage and a demand to consolidate in the same turn; it
+  never auto-drops entries. Budget percentage is rendered into the volatile tier so the model sees
+  the pressure, per file.
+- **A global `AGENTS.md` sits behind AGENTS.md the same way `USER.md` sits behind memory** — same
+  filename as the project-level file (`~/.seri/AGENTS.md`, or `~/.seri/<profile>/AGENTS.md`),
+  resolved by location rather than a second name, matching how Claude Code itself reuses `CLAUDE.md`
+  at both scopes. Deliberately **not** branded `SERI.md`: the project-level file is already
+  `AGENTS.md` rather than a branded name specifically for cross-tool interoperability, and a
+  differently-named global file would break that same property at the one scope where no repository
+  exists to disambiguate it. Human-authored only — the archivist never writes it, same rule as the
+  project `AGENTS.md` (Part II §8).
 - **Frozen per session.** Writes hit disk immediately, enter the prompt next session (Stage B).
 - **Injection scan on write** — injection patterns, credential signatures, invisible Unicode.
 - **The archivist.** After a turn completes and the response is delivered, a child agent runs on the
