@@ -191,10 +191,10 @@ audit; exact trigger constants INFERRED from secondary write-ups]
 | 1 | **Two capped memory files with hard overflow failure** — `MEMORY.md` (2,200 chars / ~800 tok, environment facts and lessons) and `USER.md` (1,375 chars / ~500 tok, identity and preferences); a write that would exceed the cap **returns an error** demanding consolidation in the same turn, rather than auto-compacting | **ADOPT** | The cap is the mechanism, not a limit on it. Claude Code #5's stated cost is "opaque memory drift"; unbounded memory is what produces drift, because consolidation that is never forced never happens. Hermes surfaces the budget in the prompt (`[67% — 1,474/2,200 chars]`) so the model can see the pressure it is under. |
 | 2 | **Frozen snapshot** — memory loads once at session start and cannot change mid-session; writes hit disk immediately but only enter the system prompt next session, preserving the provider prefix cache | **ADOPT — and it is a prompt-architecture decision, not a feature** | Paired with **ordered prompt tiers** (stable: identity + tool guidance → context: context files + recipes → volatile: memory + timestamps). The tier order is what makes caching survive a memory that changes between sessions. Same category as the client/server boundary: cheap to structure now, a refactor once routing, oracle and architect/editor are all assembling prompts. |
 | 3 | **Write-only memory tool** — `add` / `replace` / `remove` by substring; no `read` action, because memory is already in the prompt | **ADOPT** | Removes a whole class of wasted round-trips. Trivially small and obviously correct once stated. |
-| 4 | **Background review fork** — after the user response is delivered, a separate agent instance runs on the transcript with a **tool whitelist restricted to memory and skill tools**, marking what it writes with distinct provenance; fires roughly every 10 tool calls, plus a ~300s foreground "periodic nudge" | **ADAPT — becomes a named subagent role, not a subsystem** | **The one genuinely new mechanism in this survey.** It is the field's only published answer to "who decides what gets learned, and with whose context budget." Nothing else surveyed has it; `anthropics/claude-code#57830` is an open request for exactly this against the leading harness. For us it is not new machinery — it is Layer 5's isolated context + per-role tool restriction pointed at a different job. The whitelist is the load-bearing part: a learning pass that can call `bash` is not a learning pass. **Corroborated post-survey (2026-08-08):** PrimeIntellect-ai/prime-agent's "Continual Harness" (`/refine`) independently lands on the same shape — small, evidence-backed updates to durable supplemental state, never rewriting the immutable base prompt, with recorded snapshots for rollback. Two unrelated teams converging on "reviewable, provenance-tracked, non-destructive" for the same problem is a stronger signal than either alone; it does not change this verdict, it raises confidence in it. `docs/RESEARCH.md`'s post-survey addendum has the detail. |
+| 4 | **Background review fork** — after the user response is delivered, a separate agent instance runs on the transcript with a **tool whitelist restricted to memory and skill tools**, marking what it writes with distinct provenance; fires on iteration-count nudge intervals (default 10 tool calls) | **ADAPT — becomes a named subagent role, not a subsystem** | **The one genuinely new mechanism in this survey.** It is the field's only published answer to "who decides what gets learned, and with whose context budget." Nothing else surveyed has it; `anthropics/claude-code#57830` is an open request for exactly this against the leading harness. For us it is not new machinery — it is Layer 5's isolated context + per-role tool restriction pointed at a different job. The whitelist is the load-bearing part: a learning pass that can call `bash` is not a learning pass. **Corroborated post-survey (2026-08-08):** PrimeIntellect-ai/prime-agent's "Continual Harness" (`/refine`) independently lands on the same shape — small, evidence-backed updates to durable supplemental state, never rewriting the immutable base prompt, with recorded snapshots for rollback. Two unrelated teams converging on "reviewable, provenance-tracked, non-destructive" for the same problem is a stronger signal than either alone; it does not change this verdict, it raises confidence in it. `docs/RESEARCH.md`'s post-survey addendum has the detail. **Corrected 2026-08-11** (Stage 6 research pass, source read directly): the "~300s foreground periodic nudge" this row previously claimed was not found in Hermes source — only the iteration-count trigger is confirmed; treat the removed claim as retracted, not merely superseded. **Naming note, same pass:** Hermes ships a *separate*, differently-shaped `agent/curator.py` (an idle/time-triggered skill-collection janitor), unrelated to this row. This row is what we adopt, and we name our version **`archivist`**, not `curator`, specifically to avoid colliding with Hermes' own distinct mechanism. |
 | 5 | **Staged writes with an approval gate** — `write_approval: true` stages to a pending directory; `/memory pending`, `/skills diff`, `/skills approve`, `/skills reject`. Applies identically to foreground turns and the background fork | **ADOPT — but default-on, where Hermes defaults off** | This is Gemini #2's inbox, better specified. We invert the default deliberately: Hermes' own documentation names stale memory "the number one cause of weird agent behavior," and this document already committed to the position that memory is the one place opacity is least acceptable. They chose convenience; we already wrote down the opposite. |
 | 6 | **Injection scanning on memory writes** — prompt-injection patterns, credential-exfiltration signatures, invisible Unicode, rejected before persistence | **ADOPT** | Memory is the highest-value persistence target in the harness: content written once and replayed into every future system prompt. Part V already names extensibility artifacts the least-defended surface in the field; this is the same surface with a longer half-life. |
-| 7 | **Skills as procedural memory** — `SKILL.md` + YAML frontmatter, three-level progressive disclosure (`skills_list` metadata ~3k tok → `skill_view` → `skill_view(name, path)`), authored by the agent via `skill_manage` after complex tasks (≥5 tool calls), after recovering from an error, or after a user correction | **ADAPT — the authored artifact must be our recipe format** | Validates Part II §5 from the other direction: Hermes' format is Claude-skill-compatible and it consumes Anthropic-contributed skills, which is what convergence on one artifact looks like in practice. Agent-authored artifacts are worth having; a *second* artifact type called "skill" is not. One format, authored by humans or by the curator, one preview path. |
+| 7 | **Skills as procedural memory** — `SKILL.md` + YAML frontmatter, three-level progressive disclosure (`skills_list` metadata ~3k tok → `skill_view` → `skill_view(name, path)`), authored by the agent via `skill_manage` after complex tasks (≥5 tool calls), after recovering from an error, or after a user correction | **ADAPT — the authored artifact must be our recipe format** | Validates Part II §5 from the other direction: Hermes' format is Claude-skill-compatible and it consumes Anthropic-contributed skills, which is what convergence on one artifact looks like in practice. Agent-authored artifacts are worth having; a *second* artifact type called "skill" is not. One format, authored by humans or by the archivist, one preview path. |
 | 8 | **FTS5 session search** — every session in SQLite, full-text keyword search (~20ms), returning actual messages; no embeddings, deliberately | **DEFER to the daemon** | Converges with Cursor #1's rejection: the harness that could most easily ship vectors here shipped keyword search instead. Deferred on sequencing, not merit — our sessions are JSON today, the daemon needs SQLite regardless, and doing the migration twice is wasted work. |
 | 9 | **Journey timeline** (`hermes journey`) — learned skills and memory entries chronologically, with prune and edit | **DEFER** | The right instinct — auditability of accumulated memory is exactly our concern — but it is UI on top of mechanisms that must exist first. |
 | 10 | **Eight pluggable external memory providers** (Honcho, Mem0, Hindsight, …) with at-most-one enforced to prevent tool-schema bloat | **DEFER — arrives via MCP** | The at-most-one constraint is the interesting part and generalizes beyond memory. The providers themselves are an MCP concern, not an architectural one. |
@@ -257,32 +257,43 @@ memory to collide with. We have both, and the boundary has to be stated before e
 - **AGENTS.md is a human contract.** Repo-scoped, committed, nearest-in-tree *[Devin #1]*. **The
   agent never writes it.** An agent that edits its own instruction file is editing the thing that
   governs it, and the correction cannot be distinguished from drift after the fact.
-- **Memory is learned scratch.** Machine-scoped and per-project, stored outside the repository
-  (`~/.seri/memories/<project>/`), never committed, always attributed to the pass that wrote it.
+- **Memory is learned scratch.** Both machine-scoped (`USER.md`, `MEMORY.md` global) and per-project
+  (`MEMORY.md` under `~/.seri/memories/<project>/`), stored outside the repository, never committed,
+  always attributed to the pass that wrote it.
 
 The separation is the same discipline this project already enforces on itself in
 `.claude/rules/retro.md` — *retro proposes, it never applies* — and for the same reason: self-
 critique from a possibly-weak model is not trustworthy enough to unsupervised-edit the instructions
-governing every future run. Anything the curator believes belongs in the repo contract is a
+governing every future run. Anything the archivist believes belongs in the repo contract is a
 **proposal to the human**, never a write.
 
-Corollary for scope: two memory files, `MEMORY.md` per project and `USER.md` per machine. Hermes'
-split maps cleanly; only the scoping changes.
+Corollary for scope: **three** memory files, not two — **corrected 2026-08-11**. The original
+framing here ("Hermes' split maps cleanly; only the scoping changes") was wrong on the facts: Hermes'
+own `MEMORY.md` is global, not per-project (confirmed by direct source read during Stage 6 research —
+see `BUILD-PLAN.md` Stage 6b). The per-project split is real, but it is Claude Code's auto-memory
+shape, not Hermes'. Both shapes are kept rather than picking one: `USER.md` (global, identity +
+preferences), `MEMORY.md` global (cross-project environment facts and lessons, Hermes' actual shape),
+and `MEMORY.md` per project (this-repo facts and lessons, Claude Code's shape).
 
 **The full file set, once constraint #3 is admitted.** AGENTS.md is nearest-in-tree, which means
 outside a repository there is no instruction file at all — invisible while seri only does code, and
-the first thing that breaks when it does not. Four files on two axes, and the axes are what matter,
+the first thing that breaks when it does not. Five files on two axes, and the axes are what matter,
 not the count:
 
 | | **Human-authored** (contract) | **Agent-learned** (scratch) |
 |---|---|---|
 | **Per project** | `AGENTS.md`, in the repo, committed | `MEMORY.md`, outside the repo |
-| **Global** | global instruction file, machine-local | `USER.md`, machine-local |
+| **Global** | `AGENTS.md`, machine-local (same name, resolved by location — 2026-08-11) | `USER.md` + `MEMORY.md`, both machine-local |
 
 The left column is never written by the agent, in either row — §8's whole point, and it does not
 weaken just because the file is global instead of repo-scoped. The right column is written only by
-the curator, only through the gate, always with provenance. A personality file (Hermes #11) is a
-fifth thing on neither axis, which is the argument against it.
+the archivist, only through the gate, always with provenance. The global/agent-learned cell holds
+two files rather than one because they answer different questions — `USER.md` is about the person
+(identity, preferences, working-style defaults), `MEMORY.md` is about the environment (facts and
+lessons that happen to not be tied to one repo) — the same content-type split Hermes itself keeps
+between its two files, just relocated within this table now that we know both of Hermes' files are
+global. A personality file (Hermes #11) is a sixth thing on neither axis, which is the argument
+against it.
 
 Multiply the global row by **profiles** *[Hermes #14]* and this is also how one machine runs several
 agents that genuinely differ — different learned memory, different declared instructions — rather
@@ -293,7 +304,7 @@ Not a conflict — a synergy worth recording before it gets rediscovered. Part V
 lossy and unprincipled. A memory that is written mid-session and persisted to disk survives the
 flush that discards the transcript, which makes it the one channel through compaction that loses
 nothing. The negative evidence is in the field critique of Hermes: *facts not flagged before the
-flush are gone.* That argues the curator pass should be **triggered by an approaching compaction
+flush are gone.* That argues the archivist pass should be **triggered by an approaching compaction
 threshold**, not only by turn count — a save prompted at 90% context is worth more than the same
 save prompted arbitrarily. Untested; instrument it alongside the threshold measurement Layer 4
 already commits to.
@@ -346,10 +357,10 @@ primary lever. Exact trigger percentage is [CONTESTED] across the field — make
 measure it ourselves rather than inheriting folklore. *[OpenCode #5 + universal]*
 
 ### Layer 5 — Orchestration
-- Named subagent roles: `explore` (read-only), `plan` (no write), `code`, `test`, and `curator`
+- Named subagent roles: `explore` (read-only), `plan` (no write), `code`, `test`, and `archivist`
   (post-turn learning pass; tools whitelisted to memory + recipe writes, nothing else) *[Kimi #1 /
   Factory #3 / Hermes #4]*
-- One-level recursion limit *[Claude Code #2]* — the curator counts against it: a subagent does not
+- One-level recursion limit *[Claude Code #2]* — the archivist counts against it: a subagent does not
   spawn its own learning pass.
 - Parallel by default for independent work; explicit serialization on shared files/contracts *[Amp #2]*
 - Architect/editor split for planning vs. diff emission *[Aider #1]*
@@ -370,16 +381,20 @@ Client/server: one daemon owns the loop, every frontend is a client; SDK for hea
 *[OpenCode #3 / Goose #2]*. Session persist / resume / fork, `/rewind` for conversation history
 *[Gemini #1]*, checkpoints for filesystem history *[Cline #2]*. AGENTS.md at startup, nearest-in-tree
 wins *[Devin #1 / standard]* — human-written, never agent-written, with a machine-local **global
-instruction file** behind it for work outside any repository (Part II §8). Config, memory and
-sessions all hang off a **profile root** rather than one fixed home, so one machine can run several
-agents that differ in what they know *[Hermes #14]*.
+`AGENTS.md`** (same name, resolved by location — 2026-08-11) behind it for work outside any
+repository (Part II §8). Config, memory and sessions all hang off a **profile root** rather than one
+fixed home, so one machine can run several agents that differ in what they know *[Hermes #14]*.
 
-Memory: two capped files outside the repo — `MEMORY.md` per project, `USER.md` per machine — written
-through a write-only `add`/`replace`/`remove` tool that **hard-fails on overflow** rather than
-auto-compacting, scanned for injection on write, and frozen for the duration of a session so the
-provider prefix cache survives *[Hermes #1/#2/#3/#6]*. Writes stage to a reviewable inbox by
-default *[Gemini #2 / Claude Code #5 / Hermes #5, default inverted]*. The system prompt assembles in
-ordered tiers — **stable → context → volatile** — which is what makes that caching hold.
+Memory: **three** capped files outside the repo, not two — `USER.md` (global, identity/preferences),
+`MEMORY.md` global (cross-project environment facts/lessons — this is Hermes' actual `MEMORY.md`
+shape, corrected 2026-08-11 from an earlier per-project mis-attribution), and `MEMORY.md` per
+project (Claude Code's auto-memory shape). All three written through the same write-only
+`add`/`replace`/`remove` tool (a `scope` parameter selects which file) that **hard-fails on
+overflow** rather than auto-compacting, scanned for injection on write, and frozen for the duration
+of a session so the provider prefix cache survives *[Hermes #1/#2/#3/#6]*. Writes stage to a
+reviewable inbox by default *[Gemini #2 / Claude Code #5 / Hermes #5, default inverted]*. The system
+prompt assembles in ordered tiers — **stable → context → volatile** — which is what makes that
+caching hold.
 
 ### Layer 8 — Extensibility
 One artifact format (recipe: instructions + extensions + parameters + prompt) *[Goose #1 / Windsurf #1
@@ -549,7 +564,7 @@ the mitigations are mitigations, not fixes.
 |---|---|
 | **Wrong-occurrence edits** | Mitigated by truncating the cascade and preferring hard-fail + reflection. Not solved — no harness has a provably-safe fuzzy matcher, including ours. |
 | **Compaction is lossy and unprincipled** | Thresholds are [CONTESTED] field-wide (~40% degradation folklore; ~50%/~95% triggers conflict). We make ours configurable and instrument it. This is a place we could contribute a real measurement. Persistent memory narrows the loss without fixing it (Part II §9): what got saved survives the flush, and what nobody thought to save still doesn't. |
-| **Nobody knows what an agent should learn** | Hermes was the only *surveyed* harness (July 2026 pass) that even attempts it, and its own answer is agent judgment plus a periodic nudge — a heuristic, not a criterion. **Corrected 2026-08-08:** PrimeIntellect-ai/prime-agent (post-survey, see `docs/RESEARCH.md` addendum) attempts it too, via `/refine`, with a similar heuristic. Two independent attempts converging on "agent judgment, human-reviewable" rather than a measured criterion is itself evidence nobody has a criterion yet — it strengthens the finding, it doesn't resolve it. We inherit the heuristic, add the approval gate, and keep provenance so a bad lesson can be traced and deleted. Whether the curator's saves are *worth their tokens* is unmeasured field-wide and will be unmeasured for us until we instrument it. |
+| **Nobody knows what an agent should learn** | Hermes was the only *surveyed* harness (July 2026 pass) that even attempts it, and its own answer is agent judgment plus a periodic nudge — a heuristic, not a criterion. **Corrected 2026-08-08:** PrimeIntellect-ai/prime-agent (post-survey, see `docs/RESEARCH.md` addendum) attempts it too, via `/refine`, with a similar heuristic. Two independent attempts converging on "agent judgment, human-reviewable" rather than a measured criterion is itself evidence nobody has a criterion yet — it strengthens the finding, it doesn't resolve it. We inherit the heuristic, add the approval gate, and keep provenance so a bad lesson can be traced and deleted. Whether the archivist's saves are *worth their tokens* is unmeasured field-wide and will be unmeasured for us until we instrument it. |
 | **Verification beyond tests** | The oracle + LSP feedback are the best available answers. There is still no standard for independent verification. |
 | **Underspecified requests** | Explicit escalation triggers rather than self-reported confidence. Ambig-SWE's up-to-74% gain from interactivity says this is worth engineering deliberately, not bolting on. |
 | **Shared-artifact security** | Default-on previews for recipes and MCP servers; no shell execution in config. Extensibility artifacts remain the least-defended surface in the field. |

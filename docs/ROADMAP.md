@@ -55,12 +55,12 @@ comparable harnesses (opencode, Hermes, Codex, prime-agent) do it — accepted a
 
 | # | Stage | State | Why here |
 |---|---|---|---|
-| 1 | **6 — subagents** (incl. 6b curator + memory) | **next, unstarted** | Needs Stage A's signal; 7a shipped first (PR #65) so the curator is a routing target from birth |
+| 1 | **6 — subagents** (incl. 6b archivist + memory) | **next, unstarted** | Needs Stage A's signal; 7a shipped first (PR #65) so the archivist is a routing target from birth |
 | 2 | **7b — routing of roles** | not started | Architect/editor split, oracle. After 6 because the oracle *is* a subagent |
 | 3 | **11b — distribution** | not started | **Release gate — v0.1.0 ships here**, after 7b and with the gateway, subagents and role routing in it |
 | 4 | **8 — daemon** | post-release | Where the assistant arc starts (constraint #3). SQLite + FTS5 search |
 | 5 | **9 — OS sandbox tier** | post-release | bwrap / sandbox-exec / taskkill, surfaced by `seri doctor` |
-| 6 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the curator's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
+| 6 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the archivist's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
 
 Billing Phase B, the spend cap, and the portal's usage surface — the three things that were waiting
 on 7a — are unblocked as of PR #65. They are not scheduled here: Phase B is its own track
@@ -70,9 +70,11 @@ independent of the numbered stage sequence below.
 ## Stage 6 is next
 
 Subagents: named roles (`explore`/`plan`/`code`/`test`), one-level recursion limit,
-parallel-by-default with explicit serialization on shared files — plus 6b, the `curator` role and
-persistent memory (`MEMORY.md`/`USER.md` under `~/.seri/memories/`, approval-gated writes, the
-"famous self-improving agent" piece). See `docs/BUILD-PLAN.md`'s Stage 6 section for the full
+parallel-by-default with explicit serialization on shared files — plus 6b, the `archivist` role and
+persistent memory (three files under `~/.seri/memories/`: `USER.md` global, `MEMORY.md` global,
+`MEMORY.md` per project — corrected 2026-08-11 from an earlier two-file design, see Stage 6b — plus
+a global `~/.seri/AGENTS.md`; approval-gated writes; the "famous self-improving agent" piece). See
+`docs/BUILD-PLAN.md`'s Stage 6 section for the full
 rationale and verify bar. Two smaller, independently-scoped threads are also still open and can be
 picked up separately: Groq removal (scoped in conversation 2026-08-10, never run as a loop — seri
 is moving off Groq as a provider now that OpenRouter reaches the same models) and the hosted
@@ -83,5 +85,5 @@ gateway (Phase B, above).
 | Item | Gates |
 |---|---|
 | Unattended permission surface | **Blocks scheduled runs** in Stage 8. Decide before the scheduler exists |
-| Curator token cost | Measure at 6b, on the cheap model 7a provides, before defaulting it on |
+| Archivist token cost | Measure at 6b, on the cheap model 7a provides, before defaulting it on |
 | Code signing, license, repo visibility | Before first public release |

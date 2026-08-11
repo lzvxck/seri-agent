@@ -13,7 +13,7 @@ the way Claude Code ships as `claude`.) Renamed from Hesper Code on 2026-08-04.
 | Safety layering | Gate-first; OS sandbox is an upgrade tier, not the base | Part IV |
 | Platforms | Windows, macOS, Linux — natively, no WSL2/Docker prerequisite | Constraint #2 |
 | Shell | Two tools (`bash`, `powershell`), no translation between them | Part IV |
-| Instruction file | AGENTS.md, nearest-in-tree wins; global file behind it | Layer 7 / Part II §8 |
+| Instruction file | AGENTS.md, nearest-in-tree wins; a global `~/.seri/AGENTS.md` behind it (same name, resolved by location) | Layer 7 / Part II §8 |
 | Product scope | **Code-first, not code-only** — v0.1.0 ships as a coding agent; assistant work is a post-release arc | Constraint #3 |
 
 ## Scope: what "code-first, not code-only" changes in this plan
@@ -107,7 +107,7 @@ means the release where it is about dates, users or shipping.**
    model switching. **Moved ahead of Stage 6 (2026-08-06, user directive).** Unblocks billing
    Phase B, the spend cap, and the portal's usage surface. Note that 11a moving ahead of it delays
    those three by the length of the TUI — accepted deliberately, not overlooked.
-6. **Stage 6** — subagents, now including the `curator` learning pass.
+6. **Stage 6** — subagents, now including the `archivist` learning pass.
 7. **Stage 7b** — the routing-of-roles half: architect/editor split, oracle escalation. Stays
    after Stage 6 because the oracle *is* a subagent — an isolated context with a restricted
    toolset, which is the machinery Stage 6 builds.
@@ -123,9 +123,9 @@ half-argued against itself:
   switching are provider-layer work. Only the oracle (and arguably the architect/editor split)
   needs subagent machinery, and those are 7b.
 - **The old order made Stage 6 expensive and then fixed it afterward.** Stage 6 carries a 3–15×
-  token multiplier and 6b's curator compounds on top of it; the mitigation is a cheap auxiliary
+  token multiplier and 6b's archivist compounds on top of it; the mitigation is a cheap auxiliary
   model, which is exactly what 7a delivers. Under the old order 6 shipped first and 7 made it
-  affordable second. Under this order the routing table exists before 6b needs it, so the curator
+  affordable second. Under this order the routing table exists before 6b needs it, so the archivist
   is a routing target from birth rather than a retrofit — which is what Stage 7's own text always
   claimed it would be ("one more entry in a routing table that already exists").
 
@@ -140,15 +140,15 @@ slots that already exist:
 | Piece | Lands at | Relative to release |
 |---|---|---|
 | Prompt tiers | **Stage B** | before — prompt architecture, not a feature |
-| Memory store + `curator` role | **Stage 6b** | before — same machinery as Stage 6, marginal cost |
-| Curator on a cheap model | **Stage 7a** | before — and now genuinely "one more row in the routing table", since 7a lands before 6b builds the curator |
+| Memory store + `archivist` role | **Stage 6b** | before — same machinery as Stage 6, marginal cost |
+| Archivist on a cheap model | **Stage 7a** | before — and now genuinely "one more row in the routing table", since 7a lands before 6b builds the archivist |
 | FTS5 cross-session search | **Stage 8** | after — needs the daemon's SQLite |
 | Agent-authored recipes | **Stage 10** | after — needs the recipe format to exist |
 
 The split is not arbitrary. The pieces landing before the release are the ones that are nearly free
 *given work already scheduled*; the ones landing after are the ones that would need infrastructure
 built early just to serve them. Note the honest limit on the early half: memory compounds with use
-and there are no users until the release (Stage 11b), so the curator ships **working but empty**. Its value is
+and there are no users until the release (Stage 11b), so the archivist ships **working but empty**. Its value is
 zero on release day and accrues afterward. That is an acceptable trade only because the cost is
 marginal — if 6b starts growing into its own stage, it belongs after the release, not before it.
 
@@ -218,9 +218,10 @@ Two decisions to record while touching this, neither of them built here
 (`ARCHITECTURE.md` Part II §8):
 
 - **AGENTS.md is a human contract the agent never writes.** Memory is learned scratch, stored
-  outside the repo, written only by the curator through the gate.
-- **A global instruction file sits behind AGENTS.md**, machine-local, per profile, for work outside
-  any repository. It loads into the *context* tier, below AGENTS.md when both exist. Under
+  outside the repo, written only by the archivist through the gate.
+- **A global `AGENTS.md` sits behind the project one** (named 2026-08-11 — same filename, resolved
+  by location, not a second name — see Stage 6b), machine-local, per profile, for work outside any
+  repository. It loads into the *context* tier, below the project `AGENTS.md` when both exist. Under
   constraint #3 this is the file that keeps seri coherent when there is no repo at all — invisible
   today, load-bearing the moment Stage 8 lands.
 
@@ -361,20 +362,46 @@ shared files *[Amp #2]*.
 **Verify:** parallel explore subagents return summaries; the recursion guard holds under attempted
 nesting; token multiplication is measured, not assumed.
 
-### 6b — the `curator` role and persistent memory *[Hermes #1–#6]*
+### 6b — the `archivist` role and persistent memory *[Hermes #1–#6]*
 
 Sequenced here rather than as its own stage because it is not new machinery: a post-turn learning
 pass **is** an isolated context with a restricted toolset, which is exactly what Stage 6 builds. It
 lands after the four task roles work, in the same stage.
 
-- **Memory store.** `MEMORY.md` per project (~2,200 chars) and `USER.md` per machine (~1,375),
-  under `~/.seri/memories/`, never in the repo. Write-only tool (`add` / `replace` / `remove` by
-  substring — no `read`, it is already in the prompt). **Overflow hard-fails** with the overage and
-  a demand to consolidate in the same turn; it never auto-drops entries. Budget percentage is
-  rendered into the volatile tier so the model sees the pressure.
+- **Memory store — three files, not two.** **Corrected 2026-08-11:** Hermes' own `MEMORY.md` is
+  global (per profile), not per-project — the earlier text here mis-attributed a per-project design
+  to Hermes. The per-project split is real and worth keeping (it is Claude Code's own auto-memory
+  pattern, not Hermes'), so both shapes ship rather than picking one:
+  - `USER.md` — global (per machine/profile), ~1,375 chars. Identity, communication preferences,
+    technical skill level, and *default* working-style preferences that hold across every project
+    unless a specific project overrides them.
+  - `MEMORY.md` (global) — per machine/profile, ~2,200 chars. Cross-project environment facts and
+    lessons not tied to any one repository (Hermes' actual shape and cap for its `MEMORY.md`).
+  - `MEMORY.md` (per project) — one per repository, ~2,200 chars, keyed by `projectKey` (Claude
+    Code's own auto-memory shape: per-project, hard load cap, consolidate-on-overflow). Repo
+    conventions, build/test commands, tool quirks, lessons specific to that one codebase — including
+    any case where a project's own requirement overrides a `USER.md` default (the override is
+    recorded here, `USER.md` is never edited to carve out the exception).
+  All three live under `~/.seri/memories/` (global files directly under it, per-project files under
+  `~/.seri/memories/<projectToken>/`), never in the repo. Boundary rule for the archivist: *a
+  preference is `USER.md` unless it is stated as, or enforced as, a requirement of one specific
+  repository — repo requirements go in that repo's `MEMORY.md` even when phrased as a preference.*
+  One write-only tool (`add` / `replace` / `remove` by substring — no `read`, it is already in the
+  prompt) taking a `scope: "user" | "memory-global" | "memory-project"` parameter, not three separate
+  tools. **Overflow hard-fails** with the overage and a demand to consolidate in the same turn; it
+  never auto-drops entries. Budget percentage is rendered into the volatile tier so the model sees
+  the pressure, per file.
+- **A global `AGENTS.md` sits behind AGENTS.md the same way `USER.md` sits behind memory** — same
+  filename as the project-level file (`~/.seri/AGENTS.md`, or `~/.seri/<profile>/AGENTS.md`),
+  resolved by location rather than a second name, matching how Claude Code itself reuses `CLAUDE.md`
+  at both scopes. Deliberately **not** branded `SERI.md`: the project-level file is already
+  `AGENTS.md` rather than a branded name specifically for cross-tool interoperability, and a
+  differently-named global file would break that same property at the one scope where no repository
+  exists to disambiguate it. Human-authored only — the archivist never writes it, same rule as the
+  project `AGENTS.md` (Part II §8).
 - **Frozen per session.** Writes hit disk immediately, enter the prompt next session (Stage B).
 - **Injection scan on write** — injection patterns, credential signatures, invisible Unicode.
-- **The curator.** After a turn completes and the response is delivered, a child agent runs on the
+- **The archivist.** After a turn completes and the response is delivered, a child agent runs on the
   transcript with tools whitelisted to memory + recipe writes. **No shell, no edit, no web.** It
   counts against the one-level recursion limit. It needs Stage A's `AbortSignal`. Everything it
   writes is marked with its provenance.
@@ -386,9 +413,9 @@ lands after the four task roles work, in the same stage.
 
 **Verify:** a correction given in session 1 changes behavior in session 2 without being repeated.
 A write exceeding the cap returns an error and the model consolidates rather than the store growing.
-The curator provably cannot edit a file or run a command — asserted against a hostile transcript
+The archivist provably cannot edit a file or run a command — asserted against a hostile transcript
 that tries to make it. A staged write is visible, diffable, and rejectable before it takes effect.
-Token cost per turn of running the curator is **measured** and reported, not assumed cheap.
+Token cost per turn of running the archivist is **measured** and reported, not assumed cheap.
 
 ## Stage 7 — Routing and provider breadth  ·  **SPLIT: 7a runs before Stage 6, 7b after**
 
@@ -443,7 +470,7 @@ switching with context preserved is `tests/tui/tuiPty.test.ts`'s own "switching 
 Architect/editor split *[Aider #1]*; oracle escalation with read-only tools *[Amp #1]*.
 Stays after Stage 6: the oracle is an isolated context with a restricted toolset, which is Stage
 6's machinery — the same argument that places 6b inside Stage 6 rather than beside it.
-The `curator` from 6b becomes a routing target like any other role — a cheap auxiliary model, which
+The `archivist` from 6b becomes a routing target like any other role — a cheap auxiliary model, which
 is what Hermes exposes as `auxiliary.background_review`. No new design; one more entry in a routing
 table that, after 7a, genuinely already exists.
 **Verify:** oracle cannot write.
@@ -471,7 +498,7 @@ concern:
   (2026-08-08) does not soften this: see the **Unattended permission surface** open item for the
   constraint a scheduler must respect when it reads it.
 - **Idle-timeout memory flush** — a gateway session that ends by timing out never reaches a clean
-  end-of-session write, so the curator flushes proactively before the timeout rather than losing
+  end-of-session write, so the archivist flushes proactively before the timeout rather than losing
   the turn's learnings.
 
 **Verify:** two concurrent sessions run isolated against one daemon. A fact from a session weeks old
@@ -492,18 +519,18 @@ Windows rather than claiming enforcement it lacks.
 MCP with lazy tool-search *[Codex #2]*; deterministic hooks *[Claude Code #1]*; one recipe format
 with default-on diff preview *[Goose #1 + its security lesson]*.
 
-The recipe format gets a **write** path here, not just a load path: the `curator` from 6b authors
+The recipe format gets a **write** path here, not just a load path: the `archivist` from 6b authors
 recipes as procedural memory after complex or hard-won work *[Hermes #7]*. It authors **the** recipe
 format — Part II §5 says one artifact, and an agent-authored "skill" that is not a recipe would make
 it two. The default-on diff preview is already the approval gate; there is no second one to build.
 Progressive disclosure comes along with it: metadata-only listing, full body on demand.
 **Verify:** a third-party MCP server loads and its tools are indistinguishable from built-ins; a
-PreToolUse hook blocks a matching command deterministically. A curator-authored recipe is loadable,
+PreToolUse hook blocks a matching command deterministically. An archivist-authored recipe is loadable,
 previewable, and visibly distinguishable from a human-authored one.
 
 ### 10b — user-definable subagents
 
-Stage 6 ships a fixed roster (`explore`/`plan`/`code`/`test`/`curator`), hardcoded, matching Kimi
+Stage 6 ships a fixed roster (`explore`/`plan`/`code`/`test`/`archivist`), hardcoded, matching Kimi
 Code CLI / Factory Droid. It does not give the user a way to define a *new* named, spawnable role —
 what Claude Code does via `.claude/agents/*.md` (Markdown + YAML frontmatter: name / description /
 tools / model / permissionMode / isolation). Sequenced here, after the fixed roster exists (Stage 6)
@@ -584,8 +611,8 @@ Install scripts (`curl | sh`, `irm | iex`), PATH handling, Homebrew tap, Scoop b
 | Name | **Settled & shipped** | Seri, binary `seri`; lab is Seriora Research; repo `lzvxck/seri-agent`, apex `seriora.ai`. Rename landed 2026-08-04 (PR #14). |
 | TUI framework | **Settled** | Ink, inline rendering (Claude Code style, not OpenCode's full-screen). Work is incremental on Stage 2's output layer. |
 | Go MCP SDK maturity | No longer | Moot — TypeScript SDK is the reference. |
-| Curator token cost | Not yet | A learning pass per turn compounds on top of Stage 6's 3–15× subagent multiplier. Hermes pays for it with a warm prefix cache and a cheap auxiliary model; we get the second at **Stage 7a, which now lands before Stage 6** (2026-08-06), and the first from Stage B. **Measure it at 6b before deciding the default is on** — the cheap model is available by then, so the measurement is of the real configuration rather than a placeholder. |
-| Curator trigger | Not yet | Turn count is the baseline. Firing on an approaching compaction threshold is the more principled trigger (Part II §9) and is untested — instrument it with the Stage 3 threshold measurement rather than guessing. |
+| Archivist token cost | Not yet | A learning pass per turn compounds on top of Stage 6's 3–15× subagent multiplier. Hermes pays for it with a warm prefix cache and a cheap auxiliary model; we get the second at **Stage 7a, which now lands before Stage 6** (2026-08-06), and the first from Stage B. **Measure it at 6b before deciding the default is on** — the cheap model is available by then, so the measurement is of the real configuration rather than a placeholder. |
+| Archivist trigger | Not yet | Turn count is the baseline. Firing on an approaching compaction threshold is the more principled trigger (Part II §9) and is untested — instrument it with the Stage 3 threshold measurement rather than guessing. |
 | Unattended permission surface | **Blocks scheduled runs** | What a run with no human present may do. Part V's long-horizon autonomy problem, arriving concretely at Stage 8. Read-and-report is the safe floor; unattended writes are unanswered. Decide before the scheduler exists, not after. `--dangerously-skip-permissions` (added 2026-08-07) is **not** an answer to this. It is scoped to **attended** use — a human types it, on the command line, at the start of a run they are watching — and it is deliberately never written back to the session, so a later `--continue` or a scheduled resume cannot inherit it. `docs/ARCHITECTURE.md`'s Hermes #12 note stands unchanged: what an unattended run may do is a **precondition** of the scheduler, and a flag a present human types is not that decision. A **permanent allowlist** now exists (`<configDir>/permissions.yaml`, added 2026-08-08) and is also **not** an answer to this — it is more nearly the opposite. A scheduled or unattended run **must not** seed `runLoop`'s `allowedTools` from that file the way an attended CLI invocation does (`prepareSession` in `apps/cli/src/cli.ts`). Every entry in it was written by a human answering a live prompt in a run they were watching; that is consent for that run, not standing consent for one on a timer. A scheduler that reads it the same way is `docs/ARCHITECTURE.md:202`'s "entire base safety layer disabled on a timer", arriving through a file rather than through a flag. What an unattended run may do remains a **precondition** of the scheduler. |
 | Public positioning vs. constraint #3 | No | `README.md` and `AGENTS.md` say "coding-agent CLI". Deliberate — the assistant surfaces are post-release. Revisit when Stage 8 ships something a user can point at. |
 | Code signing | No | Apple notarization ($99/yr), Windows Authenticode. Not needed for `curl \| sh`; needed for broad adoption. |
