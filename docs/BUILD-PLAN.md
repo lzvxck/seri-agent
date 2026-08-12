@@ -72,6 +72,7 @@ be kept in sync.
 | 4 Checkpoints | **done** — PR #17, CI green on all three OSes. **v1 is complete.** |
 | A Abort/cancellation | **done** — PR #23 |
 | 5 Verification loop | **done** — PR #41, and **retargeted**: diagnostics hang off `write_file`, not `edit`. See the stage's own section for why the original spec was unbuildable. |
+| 6 Subagents + 6b archivist/memory | **done** — PR #81 (fixed roster + `dispatch_subagents`), PR #82 (archivist role + 3-file persistent memory). See the stage's own section below; the `archivist` role was renamed from "curator" mid-build to avoid colliding with Hermes' own, differently-shaped `curator.py`, and the memory store grew from a planned 2 files to 3 (added a global `MEMORY.md` alongside `USER.md` and the per-project `MEMORY.md`) after research corrected an earlier mis-attribution of Hermes' own file shape. |
 
 **The release moved, and that reorders everything after Stage 7.** The decision (2026-08-04): no
 release until the TUI is good, because it has to *look* right. That makes Stage 11 a release
@@ -107,7 +108,7 @@ means the release where it is about dates, users or shipping.**
    model switching. **Moved ahead of Stage 6 (2026-08-06, user directive).** Unblocks billing
    Phase B, the spend cap, and the portal's usage surface. Note that 11a moving ahead of it delays
    those three by the length of the TUI — accepted deliberately, not overlooked.
-6. **Stage 6** — subagents, now including the `archivist` learning pass.
+6. **Stage 6** — subagents, now including the `archivist` learning pass. **Done** — PR #81/#82.
 7. **Stage 7b** — the routing-of-roles half: architect/editor split, oracle escalation. Stays
    after Stage 6 because the oracle *is* a subagent — an isolated context with a restricted
    toolset, which is the machinery Stage 6 builds.
@@ -355,14 +356,21 @@ failed edit names the line that actually differs. The stage's original acceptanc
 and **self-corrected** within the same turn" — conflates a deterministic claim with model behaviour;
 only the first half is assertable, and a test claiming the second would be vacuous.
 
-## Stage 6 — Subagents
+## Stage 6 — Subagents  ·  **done** — PR #81
 Named roles — `explore` (read-only), `plan` (no write), `code`, `test` *[Kimi #1 / Factory #3]*.
 One-level recursion limit *[Claude Code #2]*. Parallel-by-default with explicit serialization on
 shared files *[Amp #2]*.
 **Verify:** parallel explore subagents return summaries; the recursion guard holds under attempted
-nesting; token multiplication is measured, not assumed.
+nesting; token multiplication is measured, not assumed. **All confirmed** — `dispatch_subagents`
+fans out via `Promise.all` for read-only roles and serializes any role holding a mutating tool
+(reader/writer split, not the path-based conflict detection the spec originally sketched — replaced
+during review with a simpler mechanism that also closes a shell-write blind spot the original design
+had); the recursion guard is structural (`dispatch_subagents` is not a key of `toolDefinitions`, so
+no child `ToolSet` can ever contain it — no depth counter exists anywhere in the code); child token
+usage is summed into the parent turn's own reported total via `onChildUsage`, with a real production
+call site, not just a test.
 
-### 6b — the `archivist` role and persistent memory *[Hermes #1–#6]*
+### 6b — the `archivist` role and persistent memory *[Hermes #1–#6]*  ·  **done** — PR #82
 
 Sequenced here rather than as its own stage because it is not new machinery: a post-turn learning
 pass **is** an isolated context with a restricted toolset, which is exactly what Stage 6 builds. It
@@ -416,6 +424,16 @@ A write exceeding the cap returns an error and the model consolidates rather tha
 The archivist provably cannot edit a file or run a command — asserted against a hostile transcript
 that tries to make it. A staged write is visible, diffable, and rejectable before it takes effect.
 Token cost per turn of running the archivist is **measured** and reported, not assumed cheap.
+**All confirmed**, including a real live end-to-end run (not just unit tests): a compiled binary
+against a real provider key staged a write, `/memory diff` rendered it, `/memory approve` applied
+it, and a fresh `loadMemory`+`buildVolatileTier` call confirmed it present as if in a new session.
+The `archivist` role is *not* wired through `subagents/roles.ts`'s `SubagentRole`/`dispatch_subagents`
+machinery at all — it builds its own single-tool `ToolSet` directly and is dispatched by
+`memory/archivist.ts` calling `runSubagent` (the same function `dispatch_subagents` itself calls
+internally), which is a smaller and more directly enforced no-recursion guarantee than routing it
+through the model-facing dispatch surface would have been. `/memory archivist on|off` (a TUI toggle
+independent of the `/memory approval` gate) shipped as part of 6b itself, not deferred — see the
+"Open items" row below, now partially answered by one real measured sample rather than fully closed.
 
 ## Stage 7 — Routing and provider breadth  ·  **SPLIT: 7a runs before Stage 6, 7b after**
 

@@ -8,7 +8,7 @@ disagree, BUILD-PLAN wins and this file is stale.
 Stage numbers are identities, not an order. They are referenced from outside the plan, so they do
 not get renumbered when the order changes.
 
-Last reconciled against the repo: 2026-08-11.
+Last reconciled against the repo: 2026-08-11 (Stage 6/6b merged).
 
 ## Shipped
 
@@ -24,6 +24,7 @@ Last reconciled against the repo: 2026-08-11.
 | B1 — profile root | PR #54. `--profile`/`SERI_PROFILE` select a profile root under `apps/cli/src/config/paths.ts`, defaulting to `default` with no `<profile>` segment and no behavioral delta from the prior fixed home |
 | B2 — prompt tiers | PR #58. `buildSystemPrompt` (`apps/cli/src/agents/systemPrompt.ts`) splits into ordered stable/context/volatile tiers; volatile ships empty (no memory built), byte-identical output confirmed for the no-memory case |
 | 11a — TUI | PR #60. Ink rendering inline (`apps/cli/src/tui/`) on top of Stage 2's streaming layer — static transcript, live status region, multiline input; slash commands mutate the live session through a reducer instead of a disk copy. Pty-driven tests cover Ctrl-C cancellation, `/exit`, and mid-turn command gating, CI green on all three OSes |
+| 6 — subagents + 6b archivist/memory | PR #81 (fixed roster + `dispatch_subagents`), PR #82 (archivist role + 3-file persistent memory). See "Stage 6 shipped" below |
 
 **Stage B is now fully shipped** (B1 + the Windows config-root relocation to `~/.seri`, PR #56 + B2).
 
@@ -55,35 +56,46 @@ comparable harnesses (opencode, Hermes, Codex, prime-agent) do it — accepted a
 
 | # | Stage | State | Why here |
 |---|---|---|---|
-| 1 | **6 — subagents** (incl. 6b archivist + memory) | **next, unstarted** | Needs Stage A's signal; 7a shipped first (PR #65) so the archivist is a routing target from birth |
-| 2 | **7b — routing of roles** | not started | Architect/editor split, oracle. After 6 because the oracle *is* a subagent |
-| 3 | **11b — distribution** | not started | **Release gate — v0.1.0 ships here**, after 7b and with the gateway, subagents and role routing in it |
-| 4 | **8 — daemon** | post-release | Where the assistant arc starts (constraint #3). SQLite + FTS5 search |
-| 5 | **9 — OS sandbox tier** | post-release | bwrap / sandbox-exec / taskkill, surfaced by `seri doctor` |
-| 6 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the archivist's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
+| 1 | **7b — routing of roles** | **next, unstarted** | Architect/editor split, oracle. After 6 (shipped) because the oracle *is* a subagent, reusing Stage 6's dispatch machinery |
+| 2 | **11b — distribution** | not started | **Release gate — v0.1.0 ships here**, after 7b and with the gateway, subagents and role routing in it |
+| 3 | **8 — daemon** | post-release | Where the assistant arc starts (constraint #3). SQLite + FTS5 search |
+| 4 | **9 — OS sandbox tier** | post-release | bwrap / sandbox-exec / taskkill, surfaced by `seri doctor` |
+| 5 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the archivist's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
 
 Billing Phase B, the spend cap, and the portal's usage surface — the three things that were waiting
 on 7a — are unblocked as of PR #65. They are not scheduled here: Phase B is its own track
 (`docs-tmp/pricing-tiers.md`, `.claude/loops/hosted-accounts-billing-gateway/`), not started, and
 independent of the numbered stage sequence below.
 
-## Stage 6 is next
+## Stage 6 shipped
 
-Subagents: named roles (`explore`/`plan`/`code`/`test`), one-level recursion limit,
-parallel-by-default with explicit serialization on shared files — plus 6b, the `archivist` role and
-persistent memory (three files under `~/.seri/memories/`: `USER.md` global, `MEMORY.md` global,
-`MEMORY.md` per project — corrected 2026-08-11 from an earlier two-file design, see Stage 6b — plus
-a global `~/.seri/AGENTS.md`; approval-gated writes; the "famous self-improving agent" piece). See
-`docs/BUILD-PLAN.md`'s Stage 6 section for the full
-rationale and verify bar. Two smaller, independently-scoped threads are also still open and can be
-picked up separately: Groq removal (scoped in conversation 2026-08-10, never run as a loop — seri
-is moving off Groq as a provider now that OpenRouter reaches the same models) and the hosted
-gateway (Phase B, above).
+Subagents: named roles (`explore`/`plan`/`code`/`test`), one-level recursion limit (structural, not
+a depth counter — the dispatch tool is simply absent from every child's own `ToolSet`),
+parallel-by-default with explicit serialization on any role holding a mutating tool — PR #81. Plus
+6b, the `archivist` role and persistent memory (three files under `~/.seri/memories/`: `USER.md`
+global, `MEMORY.md` global, `MEMORY.md` per project, plus a global `~/.seri/AGENTS.md`;
+approval-gated writes staged to `~/.seri/pending/`; a `reason`/`durable` provenance tag on every
+write; a `/memory archivist on|off` toggle independent of the approval gate; the "famous
+self-improving agent" piece) — PR #82. Both went through five rounds of independent review
+(reviewer-verifier, paired `/code-review`/thermo-nuclear passes, and real GitHub CI, which caught a
+cross-platform bug — a rename-based atomic write silently bypassing a read-only destination file's
+permissions — that five rounds of AI code review had not) before merging. See `docs/BUILD-PLAN.md`'s
+Stage 6 section for the full rationale and verify bar, both now marked confirmed.
+
+**Stage 7b is next** — architect/editor role split, oracle escalation. It reuses Stage 6's dispatch
+machinery directly (the oracle *is* a subagent), so nothing new needs to be built to route to it.
+
+Two smaller, independently-scoped threads are also still open and can be picked up separately: Groq
+removal (scoped in conversation 2026-08-10, never run as a loop — seri is moving off Groq as a
+provider now that OpenRouter reaches the same models) and the hosted gateway (Phase B, above). A
+third, newer thread — evaluating Vercel AI Gateway as a second BYOK gateway alongside OpenRouter,
+and whether it changes the case for keeping the native Anthropic/OpenAI/Google integrations as
+separate code paths (surfaced in conversation 2026-08-11) — is not yet scoped as a loop.
 
 ## Open items that gate work below
 
 | Item | Gates |
 |---|---|
 | Unattended permission surface | **Blocks scheduled runs** in Stage 8. Decide before the scheduler exists |
-| Archivist token cost | Measure at 6b, on the cheap model 7a provides, before defaulting it on |
+| Archivist token cost | **Partially answered**: one real live-e2e sample measured ~4.4k input / ~0.5k output tokens (~$0.001 on Groq) per archivist run. Not yet a broad enough sample to fully close this — a `/memory archivist off` toggle exists as the immediate mitigation if cost proves material at scale |
 | Code signing, license, repo visibility | Before first public release |
