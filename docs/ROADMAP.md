@@ -52,15 +52,29 @@ root, "Open 2"), and per-provider key priority once the hosted gateway exists (s
 Key-storage security (plaintext `config.json`, no OS keychain) was investigated and matches how
 comparable harnesses (opencode, Hermes, Codex, prime-agent) do it — accepted as-is, not a gap.
 
+**D — BYOK guided first-run setup + gateway route-column interface (unnumbered, reprioritized ahead
+of 7b, 2026-08-12).** Full design: `.claude/loops/byok-setup-gateway-research/research-spec.md`.
+Fixes Open 2 (a genuinely blank first run — zero keys configured anywhere — throws in
+`prepareSession` before the TUI ever mounts, so the user never sees `/setup`; detect this at session
+start and route into `/setup`'s existing guided flow instead) and lands Open 3's *interface only*
+(a fourth `/model` Route-column state, `gatewayReachable`/`"provided"`, plus a persistent model+route
+indicator in the TUI reusing the same label vocabulary — both wired to a `planCoverage` predicate
+that returns `false` for everything, i.e. zero behavior change, until the hosted gateway exists to
+back it). Explicitly does **not** include the hosted gateway itself (Phase B, below) — that stays its
+own unscheduled track; this stage only makes sure the CLI-side interface is ready and not rebuilt
+mid-gateway-build. Reprioritized ahead of 7b because Open 2 is a live bug (a fresh install cannot
+reach `/setup` at all in a real interactive terminal), not a new feature.
+
 ## Remaining, in execution order
 
 | # | Stage | State | Why here |
 |---|---|---|---|
-| 1 | **7b — routing of roles** | **next, unstarted** | Architect/editor split, oracle. After 6 (shipped) because the oracle *is* a subagent, reusing Stage 6's dispatch machinery |
-| 2 | **11b — distribution** | not started | **Release gate — v0.1.0 ships here**, after 7b and with the gateway, subagents and role routing in it |
-| 3 | **8 — daemon** | post-release | Where the assistant arc starts (constraint #3). SQLite + FTS5 search |
-| 4 | **9 — OS sandbox tier** | post-release | bwrap / sandbox-exec / taskkill, surfaced by `seri doctor` |
-| 5 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the archivist's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
+| 1 | **D — BYOK guided setup + gateway route interface** | not started | Reprioritized ahead of 7b, 2026-08-12: Open 2 is a live bug (fresh install can't reach `/setup`), higher urgency than 7b's new-feature work. Design: `.claude/loops/byok-setup-gateway-research/research-spec.md` |
+| 2 | **7b — routing of roles** | not started | Architect/editor split, oracle. After 6 (shipped) because the oracle *is* a subagent, reusing Stage 6's dispatch machinery |
+| 3 | **11b — distribution** | not started | **Release gate — v0.1.0 ships here**, after 7b and with the gateway, subagents and role routing in it |
+| 4 | **8 — daemon** | post-release | Where the assistant arc starts (constraint #3). SQLite + FTS5 search |
+| 5 | **9 — OS sandbox tier** | post-release | bwrap / sandbox-exec / taskkill, surfaced by `seri doctor` |
+| 6 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the archivist's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
 
 Billing Phase B, the spend cap, and the portal's usage surface — the three things that were waiting
 on 7a — are unblocked as of PR #65. They are not scheduled here: Phase B is its own track
@@ -82,7 +96,9 @@ cross-platform bug — a rename-based atomic write silently bypassing a read-onl
 permissions — that five rounds of AI code review had not) before merging. See `docs/BUILD-PLAN.md`'s
 Stage 6 section for the full rationale and verify bar, both now marked confirmed.
 
-**Stage 7b is next** — architect/editor role split, oracle escalation. It reuses Stage 6's dispatch
+**Stage D is next** (reprioritized ahead of 7b, 2026-08-12) — BYOK guided first-run setup + the
+`/model` gateway route-column interface, see "Remaining, in execution order" above. **Stage 7b
+follows it** — architect/editor role split, oracle escalation. It reuses Stage 6's dispatch
 machinery directly (the oracle *is* a subagent), so nothing new needs to be built to route to it.
 
 Two smaller, independently-scoped threads are also still open and can be picked up separately: Groq
