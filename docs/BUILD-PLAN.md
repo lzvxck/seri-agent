@@ -620,6 +620,55 @@ Install scripts (`curl | sh`, `irm | iex`), PATH handling, Homebrew tap, Scoop b
 
 **Verify:** clean-machine install succeeds on all three OSes without admin rights.
 
+## Stage 12 — Trajectory learning and `POLICY.md`  ·  **12a runs before Stage D; 12b–d are post-release**
+
+**Full design: [`EVOLUTION.md`](./EVOLUTION.md).** That document is the source of truth for this
+stage — the reward model, the five conditions on `POLICY.md`, the risk table and the open questions
+all live there and are not duplicated here.
+
+Cross-session learning: record trajectories, analyse them in batch, distil an evolving per-project
+`POLICY.md`. Distinct from 6b's `archivist`, which reads **one** transcript and writes **facts**;
+this reads **N** compacted trajectories and writes **behaviour**. Written by a new `evolver` role —
+one writer per file, so the `evolver` never touches memory and the `archivist` never touches policy.
+
+Two decisions worth carrying here because they constrain the build order:
+
+- **Metrics are computed by code, not by a model.** A compacted trajectory is deterministic
+  frontmatter (harness-generated, from the event log) plus a narrative body (model-generated). The
+  compactor is never handed the metrics to rewrite. A judge score never enters the gate — if both
+  sides of an A/B come from judge calls with variance, the comparison measures noise.
+- **Correctness is a gate, not a weighted term.** A revision that improves efficiency while
+  regressing correctness is rejected outright. A weighted sum would let the agent "improve" by doing
+  less work; an ordering cannot.
+
+| # | Sub-stage | Depends on | When |
+|---|---|---|---|
+| 12a | Event schema + trajectory writer. No analysis, no model calls | nothing | **before Stage D** |
+| 12b | Compaction store + compactor subagent (deterministic aggregator + fixed-schema narrative, incremental and cached) | 12a, Stage 8 | post-release |
+| 12c | Eval harness — task set, runner, three arms (no policy / hand-written / evolved) | 12b | post-release |
+| 12d | `evolver` role, `POLICY.md`, `/evolve`, gate integration | **12c** | post-release |
+
+**12a is the only urgent part, and it is urgent for the same reason Stage B was.** Every stage that
+lands without emitting structured events is corpus that cannot be recovered — sessions that already
+happened cannot be retroactively instrumented. Same category as the profile root ("cheap strictly
+because it is early") and the prompt tiers: additive now, transversal refactor later. The analyser
+can wait months; the data cannot wait at all. 12b waits for Stage 8 because the trajectory store is
+the same SQLite migration this plan already refuses to do twice.
+
+**12d is gated on 12c**, deliberately — the ruler is built before the thing it measures, which makes
+"no unfalsifiable lessons" structural rather than a rule someone has to remember.
+
+**Out of scope, deliberately:** trajectories → dataset → SFT/RL ("Loop 2"). It collides with Devin #2,
+already recorded as an explicit anti-pattern, and `ARCHITECTURE.md`'s Hermes #13 rejection. The only
+obligation taken on now is a versioned event schema and an export path, so the decision stays
+available. See `EVOLUTION.md` Part VII.
+
+**Verify:** a policy revision that regresses the correctness gate is rejected **automatically**,
+with no human in the path — asserted against a deliberately bad revision. The same eval run twice on
+one policy version produces identical hard metrics. A promoted line traces to its supporting
+trajectories and reverts individually. Total `/evolve` cost over a realistic corpus is **measured and
+reported**, not assumed cheap — the same bar 6b was held to.
+
 ---
 
 # Open items
@@ -632,6 +681,7 @@ Install scripts (`curl | sh`, `irm | iex`), PATH handling, Homebrew tap, Scoop b
 | Archivist token cost | Not yet | A learning pass per turn compounds on top of Stage 6's 3–15× subagent multiplier. Hermes pays for it with a warm prefix cache and a cheap auxiliary model; we get the second at **Stage 7a, which now lands before Stage 6** (2026-08-06), and the first from Stage B. **Measure it at 6b before deciding the default is on** — the cheap model is available by then, so the measurement is of the real configuration rather than a placeholder. |
 | Archivist trigger | Not yet | Turn count is the baseline. Firing on an approaching compaction threshold is the more principled trigger (Part II §9) and is untested — instrument it with the Stage 3 threshold measurement rather than guessing. |
 | Unattended permission surface | **Blocks scheduled runs** | What a run with no human present may do. Part V's long-horizon autonomy problem, arriving concretely at Stage 8. Read-and-report is the safe floor; unattended writes are unanswered. Decide before the scheduler exists, not after. `--dangerously-skip-permissions` (added 2026-08-07) is **not** an answer to this. It is scoped to **attended** use — a human types it, on the command line, at the start of a run they are watching — and it is deliberately never written back to the session, so a later `--continue` or a scheduled resume cannot inherit it. `docs/ARCHITECTURE.md`'s Hermes #12 note stands unchanged: what an unattended run may do is a **precondition** of the scheduler, and a flag a present human types is not that decision. A **permanent allowlist** now exists (`<configDir>/permissions.yaml`, added 2026-08-08) and is also **not** an answer to this — it is more nearly the opposite. A scheduled or unattended run **must not** seed `runLoop`'s `allowedTools` from that file the way an attended CLI invocation does (`prepareSession` in `apps/cli/src/cli.ts`). Every entry in it was written by a human answering a live prompt in a run they were watching; that is consent for that run, not standing consent for one on a timer. A scheduler that reads it the same way is `docs/ARCHITECTURE.md:202`'s "entire base safety layer disabled on a timer", arriving through a file rather than through a flag. What an unattended run may do remains a **precondition** of the scheduler. |
+| Trajectory retention and off-machine consent | **Blocks 12a's writer** | How long raw trajectories live, what gets truncated at record time, and the explicit consent moment before `/evolve` ships a project's corpus to a third-party model — which is Devin #2's "transmit user code" arriving through a new door. Retention shape is far easier to pick before the data exists than after. `EVOLUTION.md` Part VIII, rows 1 and 3. |
 | Public positioning vs. constraint #3 | No | `README.md` and `AGENTS.md` say "coding-agent CLI". Deliberate — the assistant surfaces are post-release. Revisit when Stage 8 ships something a user can point at. |
 | Code signing | No | Apple notarization ($99/yr), Windows Authenticode. Not needed for `curl \| sh`; needed for broad adoption. |
 | License, repo visibility | No | Decide before first public release. |

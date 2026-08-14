@@ -69,12 +69,14 @@ reach `/setup` at all in a real interactive terminal), not a new feature.
 
 | # | Stage | State | Why here |
 |---|---|---|---|
-| 1 | **D — BYOK guided setup + gateway route interface** | not started | Reprioritized ahead of 7b, 2026-08-12: Open 2 is a live bug (fresh install can't reach `/setup`), higher urgency than 7b's new-feature work. Design: `.claude/loops/byok-setup-gateway-research/research-spec.md` |
-| 2 | **7b — routing of roles** | not started | Architect/editor split, oracle. After 6 (shipped) because the oracle *is* a subagent, reusing Stage 6's dispatch machinery |
-| 3 | **11b — distribution** | not started | **Release gate — v0.1.0 ships here**, after 7b and with the gateway, subagents and role routing in it |
-| 4 | **8 — daemon** | post-release | Where the assistant arc starts (constraint #3). SQLite + FTS5 search |
-| 5 | **9 — OS sandbox tier** | post-release | bwrap / sandbox-exec / taskkill, surfaced by `seri doctor` |
-| 6 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the archivist's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
+| 1 | **12a — event schema + trajectory writer** | not started | Pulled ahead of D (2026-08-14). Additive, no model in the path, and sessions that land uninstrumented are corpus that can never be recovered. Same "cheap strictly because it is early" argument as the profile root and the prompt tiers. Design: [`EVOLUTION.md`](./EVOLUTION.md) |
+| 2 | **D — BYOK guided setup + gateway route interface** | not started | Reprioritized ahead of 7b, 2026-08-12: Open 2 is a live bug (fresh install can't reach `/setup`), higher urgency than 7b's new-feature work. Design: `.claude/loops/byok-setup-gateway-research/research-spec.md` |
+| 3 | **7b — routing of roles** | not started | Architect/editor split, oracle. After 6 (shipped) because the oracle *is* a subagent, reusing Stage 6's dispatch machinery |
+| 4 | **11b — distribution** | not started | **Release gate — v0.1.0 ships here**, after 7b and with the gateway, subagents and role routing in it |
+| 5 | **8 — daemon** | post-release | Where the assistant arc starts (constraint #3). SQLite + FTS5 search |
+| 6 | **9 — OS sandbox tier** | post-release | bwrap / sandbox-exec / taskkill, surfaced by `seri doctor` |
+| 7 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the archivist's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
+| 8 | **12b–12d — trajectory learning + `POLICY.md`** | post-release | Cross-session learning: compaction store (12b, needs 8's SQLite — same migration, not done twice), eval harness (12c), then `evolver` + `POLICY.md` + `/evolve` (12d, **gated on 12c**). Design: [`EVOLUTION.md`](./EVOLUTION.md) |
 
 Billing Phase B, the spend cap, and the portal's usage surface — the three things that were waiting
 on 7a — are unblocked as of PR #65. They are not scheduled here: Phase B is its own track
@@ -112,6 +114,7 @@ separate code paths (surfaced in conversation 2026-08-11) — is not yet scoped 
 
 | Item | Gates |
 |---|---|
-| Unattended permission surface | **Blocks scheduled runs** in Stage 8. Decide before the scheduler exists |
+| Unattended permission surface | **Blocks scheduled runs** in Stage 8. Decide before the scheduler exists. Also gates `/evolve` (12d) — promotion of a policy line needs a human, so `/evolve` stays interactive-only until this is settled |
+| Trajectory retention + off-machine consent | **Blocks 12a's writer.** Retention window, record-time truncation, and the explicit consent moment before `/evolve` sends a corpus to a third-party model. Easier to pick before the data exists |
 | Archivist token cost | **Partially answered**: one real live-e2e sample measured ~4.4k input / ~0.5k output tokens (~$0.001 on Groq) per archivist run. Not yet a broad enough sample to fully close this — a `/memory archivist off` toggle exists as the immediate mitigation if cost proves material at scale |
 | Code signing, license, repo visibility | Before first public release |
