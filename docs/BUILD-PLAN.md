@@ -81,7 +81,8 @@ release hostage to the daemon, the OS sandbox and MCP, none of which have anythi
 seri looks.
 
 The plan already anticipated this: Stage 11 says the TUI is *incremental* on Stage 2's streaming
-stdout — that is the payoff of choosing inline rendering over a full-screen alternate buffer — and
+stdout — that is the payoff of choosing inline rendering over a full-screen alternate buffer (the
+inline choice itself is reversed as of 2026-08-16 — see Stage 11a's section) — and
 that it "can be pulled earlier than Stage 11 if the ergonomics start to hurt". It is not that they
 hurt; it is that the TUI is now on the critical path.
 
@@ -278,7 +279,9 @@ collision, and atomic write against a locked file.
 
 Deferring the TUI is deliberate, and cheap because of the rendering model we chose (below):
 streaming stdout *is* the foundation the inline TUI builds on, not a throwaway. Stage 11a enriches
-this output layer; it does not replace it.
+this output layer; it does not replace it. (Reversed 2026-08-16, same as Stage 11a's own section:
+the TUI now renders full-screen and does replace this layer's own output with a scrollable
+viewport — this sentence describes the original, no-longer-current design.)
 
 **Verify:** given a scratch repo and a real task, `seri` completes it end to end. Read-only mode
 demonstrably blocks writes. A killed session resumes with context intact.
@@ -585,6 +588,15 @@ Consequence: this stage **enriches** Stage 2's streaming stdout rather than repl
 line, spinner, diff rendering, mode indicator, multiline input, all layered onto the same append-only
 output model. Full-screen would have meant rewriting that layer wholesale.
 
+**Reversed, 2026-08-16 (user directive).** Both premises above no longer hold: Claude Code has
+rendered in the alternate screen by default since 2026-05-06 (code.claude.com/docs/en/fullscreen),
+so the "Claude Code renders inline / OpenCode renders full-screen — we take the former" contrast is
+wrong on both the fact and the conclusion it drew. seri itself now takes the alternate-screen path
+too — one continuous `\x1b[?1049h`/`\x1b[?1049l` session per launch, `<Static>`'s append-only
+transcript replaced by a measured, tail-anchored, scrollable viewport (`apps/cli/src/tui/`). The
+"enriches Stage 2's streaming stdout rather than replacing it" consequence above is superseded along
+with the premise it followed from.
+
 **Why it moved (2026-08-07, user directive).** The plan already said the TUI "can be pulled earlier
 than Stage 11 if the ergonomics start to hurt". That is not the reason. The reason is that **every
 slash command built before the TUI is built in a shape the TUI cannot use, and is therefore paid for
@@ -676,7 +688,7 @@ reported**, not assumed cheap — the same bar 6b was held to.
 | Item | Blocking? | Note |
 |---|---|---|
 | Name | **Settled & shipped** | Seri, binary `seri`; lab is Seriora Research; repo `lzvxck/seri-agent`, apex `seriora.ai`. Rename landed 2026-08-04 (PR #14). |
-| TUI framework | **Settled** | Ink, inline rendering (Claude Code style, not OpenCode's full-screen). Work is incremental on Stage 2's output layer. |
+| TUI framework | **Settled** | Ink, alternate-screen (full-screen) rendering. Reversed 2026-08-16 from the original inline choice — see Stage 11a's own section. |
 | Go MCP SDK maturity | No longer | Moot — TypeScript SDK is the reference. |
 | Archivist token cost | Not yet | A learning pass per turn compounds on top of Stage 6's 3–15× subagent multiplier. Hermes pays for it with a warm prefix cache and a cheap auxiliary model; we get the second at **Stage 7a, which now lands before Stage 6** (2026-08-06), and the first from Stage B. **Measure it at 6b before deciding the default is on** — the cheap model is available by then, so the measurement is of the real configuration rather than a placeholder. |
 | Archivist trigger | Not yet | Turn count is the baseline. Firing on an approaching compaction threshold is the more principled trigger (Part II §9) and is untested — instrument it with the Stage 3 threshold measurement rather than guessing. |
