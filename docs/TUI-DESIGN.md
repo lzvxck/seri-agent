@@ -47,12 +47,15 @@ terminal face is the only one that ships.
 
 Four surfaces from the current TUI, restyled against the pair above. Square corners throughout —
 the one deliberate departure from what Ink draws today (`borderStyle="round"`): a hairline box
-reads as structure, not a friendly rounded card, and it's the smaller edit in `theme.ts`'s
-neighborhood — `borderStyle="single"` in place of `"round"`, everywhere.
+reads as structure, not a friendly rounded card. Each panel sets `borderStyle` inline on its own
+`Box`, so this is `borderStyle="single"` in place of `"round"` at every call site — `App.tsx`,
+`panels/ApprovalBox.tsx`, `panels/AuthPanel.tsx`, `panels/ConfigPanel.tsx`, `panels/InputBox.tsx`,
+`panels/ModelPicker.tsx`, `panels/PermissionsPanel.tsx`, `panels/SetupPanel.tsx`, and
+`panels/WelcomeSplash.tsx` — not a `theme.ts` change.
 
 **Input box + mode indicator** (`panels/InputBox.tsx`), raw capture:
 
-```
+```text
 ┌──────────────────────────────────────────────┐
 │ fix the ConfigPanel wrap                      │
 └──────────────────────────────────────────────┘
@@ -61,7 +64,7 @@ neighborhood — `borderStyle="single"` in place of `"round"`, everywhere.
 
 **Transcript viewport, scrolled up** (`App.tsx`):
 
-```
+```text
 Session f4bff75d created.
 > fix the ConfigPanel wrap
 → read_file(apps/cli/src/tui/commands.ts)
@@ -70,25 +73,25 @@ Session f4bff75d created.
 
 **Approval prompt — no hue, so weight and a mark carry it** (`panels/ApprovalBox.tsx`):
 
-```
+```text
 ! Approve write_file({"path":"a.txt"})? [y]es / [a]lways (saved for this project) / [N]o
 ```
 
 **/config — selection is reverse video, not color** (`panels/ConfigPanel.tsx`):
 
-```
+```text
 > Automatic verification: on                      (reverse video)
   Verify command: bun run check (config)
   Shell command run to verify edits, e.g. "bun run check". Unset disables it.
   ↑/↓ move · Enter/a set · r/Delete unset · Esc/Ctrl-D close
 ```
 
-## Porting notes — what actually changes in theme.ts
+## Porting notes — the color-token change in theme.ts
 
-The only file this design touches at the code level. Error and warning lose their hue and gain a
-mark instead — the same substitution the approval box above already makes. Accent disappears
-outright: nothing in this system needs a fifth color, because selection is a background swap, not
-a tint.
+The only file the *color* side of this design touches at the code level (the border-style change
+is the per-component edit listed above). Error and warning lose their hue and gain a mark instead
+— the same substitution the approval box above already makes. Accent disappears outright: nothing
+in this system needs a fifth color, because selection is a background swap, not a tint.
 
 ```diff
  export const theme = {
