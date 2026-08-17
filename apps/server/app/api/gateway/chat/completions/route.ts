@@ -21,17 +21,34 @@ import { insertUsageEvent, updateUsageEvent } from "../../../../../lib/usageLedg
 // `Number("")` is 0 too (an unset/blank env assignment reads as an empty string, not undefined),
 // so blank is checked explicitly rather than relying on Number.isFinite to catch it — and a
 // negative override is clamped to 0 rather than trusted, since decidePreflight's
-// `requestsToday >= cap` check treats a negative cap as "always allow", not "always refuse".
+// `requestsToday >= cap` checks would otherwise read a negative cap as "always allow".
+function resolveDailyCap(raw: string | undefined, fallback: number): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return fallback;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? Math.max(0, n) : fallback;
+}
+
 // Default 50: docs-tmp/pricing-tiers.md states outright this number is a guess to be
 // instrumented, not a measured budget.
 export function resolveFreeDailyCap(raw: string | undefined): number {
-  const trimmed = raw?.trim();
-  if (!trimmed) return 50;
-  const n = Number(trimmed);
-  return Number.isFinite(n) ? Math.max(0, n) : 50;
+  return resolveDailyCap(raw, 50);
 }
 
 export const FREE_DAILY_REQUEST_CAP = resolveFreeDailyCap(process.env.SERI_FREE_DAILY_REQUESTS);
+
+// A count-based backstop for paid plans, independent of the dollar-sum check: an aborted stream
+// (cancelled before its final `usage` frame arrives) leaves its usage_events row's cost at the
+// provisional $0 it was written with, so sumSpendThisMonth alone cannot bound an account that
+// repeatedly starts and aborts generations — the dollar check would never trigger no matter how
+// many attempts were made. This caps the number of ATTEMPTS per day regardless of whether any
+// individual one was ever costed accurately, the same brake Free's own daily-count cap already
+// is. Default 500 is a placeholder pending real usage data, same as FREE_DAILY_REQUEST_CAP's own.
+export function resolvePaidDailyCap(raw: string | undefined): number {
+  return resolveDailyCap(raw, 500);
+}
+
+export const PAID_DAILY_REQUEST_CAP = resolvePaidDailyCap(process.env.SERI_PAID_DAILY_REQUESTS);
 
 // A missing catalog entry, or an entry whose `pricing` is `undefined` (which means "unknown",
 // not "free"), is NOT zero-price — fail closed, the same posture catalog.ts's empty-manifest
@@ -49,7 +66,7 @@ export type PreflightInput = {
   plan: Plan;
   modelId: string;
   catalog: ModelCatalog;
-  requestsToday: number; // Free only
+  requestsToday: number;
   spendUsd: number; // paid only
 };
 export type PreflightDecision =
@@ -57,12 +74,15 @@ export type PreflightDecision =
   | {
       allow: false;
       status: 402;
-      code: "free_daily_cap" | "model_not_in_free_tier" | "allowance_exhausted";
+      code: "free_daily_cap" | "model_not_in_free_tier" | "allowance_exhausted" | "paid_daily_cap";
     };
 
 // Free is measured in request count, because its allowance is $0 by construction and a
 // dollar-sum check can never trigger — two independent checks, either of which refuses on its
-// own, so a plan can never be exempted from one rule by passing the other.
+// own, so a plan can never be exempted from one rule by passing the other. Paid plans get both
+// the dollar-sum check AND their own request-count backstop (PAID_DAILY_REQUEST_CAP's own
+// comment explains why the dollar check alone is not sufficient) — same independence, either
+// one refusing is enough.
 export function decidePreflight(input: PreflightInput): PreflightDecision {
   if (input.plan === "free") {
     if (input.requestsToday >= FREE_DAILY_REQUEST_CAP) {
@@ -72,6 +92,9 @@ export function decidePreflight(input: PreflightInput): PreflightDecision {
       return { allow: false, status: 402, code: "model_not_in_free_tier" };
     }
     return { allow: true };
+  }
+  if (input.requestsToday >= PAID_DAILY_REQUEST_CAP) {
+    return { allow: false, status: 402, code: "paid_daily_cap" };
   }
   const allowance = PLAN_MONTHLY_USD[input.plan] * INCLUDED_SPEND_RATIO;
   if (input.spendUsd >= allowance) {
@@ -244,11 +267,18 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
 
   const catalog = await getModelCatalog();
   const entry = findCatalogEntry(catalog, modelId, "openrouter");
+  // Read-then-insert, not atomic: N concurrent requests from one account can all read the same
+  // countRequestsToday/sumSpendThisMonth result and all pass preflight before any of their own
+  // provisional rows (below) commit, allowing a bounded over-quota burst — the count/spend
+  // catches up on the NEXT request, since every attempt still gets recorded, so this is not
+  // unlimited usage, only unbounded-until-caught-up. A real fix would make the count-and-insert
+  // one atomic DB operation (a Postgres RPC); out of scope while burst size stays small enough
+  // not to matter in practice.
   const preflight = decidePreflight({
     plan,
     modelId,
     catalog,
-    requestsToday: plan === "free" ? await countRequestsToday(supabase, identity.userId) : 0,
+    requestsToday: await countRequestsToday(supabase, identity.userId),
     spendUsd: plan === "free" ? 0 : await sumSpendThisMonth(supabase, identity.userId),
   });
   if (!preflight.allow) {

@@ -10,7 +10,9 @@ import {
   FREE_DAILY_REQUEST_CAP,
   handlePost,
   isZeroPriceModel,
+  PAID_DAILY_REQUEST_CAP,
   resolveFreeDailyCap,
+  resolvePaidDailyCap,
   usageRowFrom,
 } from "../app/api/gateway/chat/completions/route";
 import type { AccountForToken } from "../lib/accountStatus";
@@ -92,6 +94,21 @@ describe("resolveFreeDailyCap", () => {
   // `requestsToday >= cap` check would otherwise read a negative cap as "always allow".
   test("clamps a negative override to 0", () => {
     expect(resolveFreeDailyCap("-5")).toBe(0);
+  });
+});
+
+// Same parsing rules as resolveFreeDailyCap (shared implementation), only the fallback differs.
+describe("resolvePaidDailyCap", () => {
+  test("falls back to 500 when unset", () => {
+    expect(resolvePaidDailyCap(undefined)).toBe(500);
+  });
+
+  test("respects an explicit 0", () => {
+    expect(resolvePaidDailyCap("0")).toBe(0);
+  });
+
+  test("parses a positive override", () => {
+    expect(resolvePaidDailyCap("250")).toBe(250);
   });
 });
 
@@ -229,18 +246,48 @@ describe("decidePreflight — paid plans", () => {
     ).toEqual({ allow: true });
   });
 
-  // A paid plan is judged only by the dollar rule — a huge request count must not refuse it,
-  // which would mean the two rules had been collapsed into one.
-  test("a paid plan is never refused by the request-count rule", () => {
+  // The count-based backstop: an aborted stream never advances sumSpendThisMonth past the
+  // provisional $0 it was recorded at, so the dollar check alone cannot bound an account that
+  // repeatedly starts and aborts generations. Refused here despite negligible spend proves the
+  // count check is independent of the dollar check, not folded into it.
+  test("refuses at the paid daily request cap even with plenty of dollar allowance remaining", () => {
     expect(
       decidePreflight({
         plan: "pro",
         modelId: PRICED_ENTRY.id,
         catalog,
-        requestsToday: 1_000_000,
+        requestsToday: PAID_DAILY_REQUEST_CAP,
+        spendUsd: 0,
+      }),
+    ).toEqual({ allow: false, status: 402, code: "paid_daily_cap" });
+  });
+
+  test("allows one request under the paid daily request cap", () => {
+    expect(
+      decidePreflight({
+        plan: "pro",
+        modelId: PRICED_ENTRY.id,
+        catalog,
+        requestsToday: PAID_DAILY_REQUEST_CAP - 1,
         spendUsd: 0,
       }),
     ).toEqual({ allow: true });
+  });
+
+  // The mirror of the case above: under the count cap does not exempt an account whose dollar
+  // allowance is exhausted — the dollar check still fires on its own.
+  test("refuses when under the paid daily cap but the dollar allowance is exhausted", () => {
+    const allowance = PLAN_MONTHLY_USD.pro * INCLUDED_SPEND_RATIO;
+
+    expect(
+      decidePreflight({
+        plan: "pro",
+        modelId: PRICED_ENTRY.id,
+        catalog,
+        requestsToday: 0,
+        spendUsd: allowance,
+      }),
+    ).toEqual({ allow: false, status: 402, code: "allowance_exhausted" });
   });
 });
 
@@ -482,7 +529,9 @@ function gatewayRequest(body: unknown, headers: Record<string, string> = {}): Re
 
 // Unlike fakeUsageSupabase, this records every upsert/update call rather than answering from
 // fixed opts — needed to assert on idempotency_key values and call counts directly.
-function fakeUsageSupabaseTracking() {
+function fakeUsageSupabaseTracking(
+  opts: { count?: number; costRows?: { cost_usd: number }[] } = {},
+) {
   const upserts: Record<string, unknown>[] = [];
   const updates: { row: Record<string, unknown>; idempotencyKey: string }[] = [];
   const client = {
@@ -493,8 +542,8 @@ function fakeUsageSupabaseTracking() {
           eq: () => ({
             gte: () =>
               selectOpts?.head
-                ? Promise.resolve({ count: 0, data: null, error: null })
-                : Promise.resolve({ data: [], error: null }),
+                ? Promise.resolve({ count: opts.count ?? 0, data: null, error: null })
+                : Promise.resolve({ data: opts.costRows ?? [], error: null }),
           }),
         }),
         upsert: (row: Record<string, unknown>) => {
@@ -530,26 +579,29 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
     delete process.env.SERI_DISABLE_MODELS_FETCH;
   });
 
-  test("missing Authorization header: 401 unauthenticated, zero upstream calls", async () => {
+  test("missing Authorization header: 401 unauthenticated, zero upstream calls, zero ledger writes", async () => {
     const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking();
 
     const response = await handlePost(gatewayRequest({ model: "m" }, { Authorization: "" }), {
-      supabase: fakeUsageSupabase(),
+      supabase,
       polar: fakePolarWith([]),
       fetchFn,
     });
 
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ code: "unauthenticated" });
+    expect(upserts).toHaveLength(0);
   });
 
-  test("a malformed token: 401 token_invalid, zero upstream calls", async () => {
+  test("a malformed token: 401 token_invalid, zero upstream calls, zero ledger writes", async () => {
     const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking();
 
     const response = await handlePost(
       gatewayRequest({ model: "m" }, { Authorization: "Bearer not-a-jwt" }),
       {
-        supabase: fakeUsageSupabase(),
+        supabase,
         polar: fakePolarWith([]),
         fetchFn,
       },
@@ -557,13 +609,15 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
 
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ code: "token_invalid" });
+    expect(upserts).toHaveLength(0);
   });
 
-  test("a malformed JSON body: 400 invalid_body, zero upstream calls", async () => {
+  test("a malformed JSON body: 400 invalid_body, zero upstream calls, zero ledger writes", async () => {
     const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking();
 
     const response = await handlePost(gatewayRequest("not json"), {
-      supabase: fakeUsageSupabase(),
+      supabase,
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
       fetchFn,
@@ -571,13 +625,15 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "invalid_body" });
+    expect(upserts).toHaveLength(0);
   });
 
-  test("a product this deployment cannot name: 402 unknown_plan, zero upstream calls", async () => {
+  test("a product this deployment cannot name: 402 unknown_plan, zero upstream calls, zero ledger writes", async () => {
     const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking();
 
     const response = await handlePost(gatewayRequest({ model: "m" }), {
-      supabase: fakeUsageSupabase(),
+      supabase,
       polar: fakePolarWith([{ id: "sub_x", productId: "prod_unrecognized" }]),
       getAccountForToken: identityStub(fakeIdentity()),
       fetchFn,
@@ -585,13 +641,17 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
 
     expect(response.status).toBe(402);
     expect(await response.json()).toEqual({ code: "unknown_plan" });
+    expect(upserts).toHaveLength(0);
   });
 
-  test("at the Free daily cap: 402 free_daily_cap, zero upstream calls", async () => {
+  test("at the Free daily cap: 402 free_daily_cap, zero upstream calls, zero ledger writes", async () => {
     const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking({
+      count: FREE_DAILY_REQUEST_CAP,
+    });
 
     const response = await handlePost(gatewayRequest({ model: "m" }), {
-      supabase: fakeUsageSupabase({ count: FREE_DAILY_REQUEST_CAP }),
+      supabase,
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
       fetchFn,
@@ -599,13 +659,15 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
 
     expect(response.status).toBe(402);
     expect(await response.json()).toEqual({ code: "free_daily_cap" });
+    expect(upserts).toHaveLength(0);
   });
 
-  test("a priced model on Free: 402 model_not_in_free_tier, zero upstream calls", async () => {
+  test("a priced model on Free: 402 model_not_in_free_tier, zero upstream calls, zero ledger writes", async () => {
     const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking({ count: 0 });
 
     const response = await handlePost(gatewayRequest({ model: "openai/gpt-5" }), {
-      supabase: fakeUsageSupabase({ count: 0 }),
+      supabase,
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
       fetchFn,
@@ -613,14 +675,36 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
 
     expect(response.status).toBe(402);
     expect(await response.json()).toEqual({ code: "model_not_in_free_tier" });
+    expect(upserts).toHaveLength(0);
   });
 
-  test("over the included-spend allowance on a paid plan: 402 allowance_exhausted, zero upstream calls", async () => {
+  test("at the paid daily request cap: 402 paid_daily_cap, zero upstream calls, zero ledger writes", async () => {
     const fetchFn = neverFetch();
-    const allowance = PLAN_MONTHLY_USD.pro * INCLUDED_SPEND_RATIO;
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking({
+      count: PAID_DAILY_REQUEST_CAP,
+    });
 
     const response = await handlePost(gatewayRequest({ model: "m" }), {
-      supabase: fakeUsageSupabase({ costRows: [{ cost_usd: allowance }] }),
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ code: "paid_daily_cap" });
+    expect(upserts).toHaveLength(0);
+  });
+
+  test("over the included-spend allowance on a paid plan: 402 allowance_exhausted, zero upstream calls, zero ledger writes", async () => {
+    const fetchFn = neverFetch();
+    const allowance = PLAN_MONTHLY_USD.pro * INCLUDED_SPEND_RATIO;
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking({
+      costRows: [{ cost_usd: allowance }],
+    });
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
       fetchFn,
@@ -628,6 +712,7 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
 
     expect(response.status).toBe(402);
     expect(await response.json()).toEqual({ code: "allowance_exhausted" });
+    expect(upserts).toHaveLength(0);
   });
 });
 
@@ -853,5 +938,56 @@ describe("handlePost — aborting mid-stream still writes the attempt", () => {
 
     expect(upserts).toHaveLength(1);
     expect(updates).toHaveLength(0);
+  });
+});
+
+describe("handlePost — a normal completion updates the same row the provisional insert created", () => {
+  beforeAll(() => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+  });
+  afterAll(() => {
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+  });
+
+  function completedSseUpstream(): Response {
+    const chunks = [
+      'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+      'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.002}}\n\n',
+      "data: [DONE]\n\n",
+    ];
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    });
+    return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  }
+
+  test("exactly one upsert and one update, same idempotency key, the update carrying the final usage", async () => {
+    const { client: supabase, upserts, updates } = fakeUsageSupabaseTracking();
+    const fetchFn = (async () => completedSseUpstream()) as unknown as typeof fetch;
+
+    const response = await handlePost(gatewayRequest({ model: "m", stream: true }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+    await response.text();
+    // flush()'s own updateUsageEvent call is fire-and-forget (`void`d) — give it a tick to land.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(upserts).toHaveLength(1);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.idempotencyKey).toBe(upserts[0]?.idempotency_key as string);
+    // The provisional insert wrote zeros; the update must carry the real, non-zero values.
+    expect(upserts[0]?.input_tokens).toBe(0);
+    expect(upserts[0]?.cost_usd).toBe(0);
+    expect(updates[0]?.row.input_tokens).toBe(10);
+    expect(updates[0]?.row.output_tokens).toBe(5);
+    expect(updates[0]?.row.cost_usd).toBe(0.002);
   });
 });

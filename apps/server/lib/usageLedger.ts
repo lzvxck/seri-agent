@@ -1,12 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// Called twice per request: once, awaited, for the provisional zero-usage row written before
-// the upstream call even starts, and once more (fire-and-forget, from updateUsageEvent below)
-// after the response has already streamed back to the caller — a ledger write failure must not
-// be able to corrupt a completed stream either way, so this never throws, only logs.
-// `ignoreDuplicates` is postgrest-js's spelling of INSERT ... ON CONFLICT DO NOTHING, the same
-// shape provisioningClaim.ts's claimProvisioning already uses, keyed here on idempotency_key
-// rather than workos_user_id.
+// Called once per request, awaited, for the provisional zero-usage row written before the
+// upstream call even starts — updateUsageEvent below is the separate, fire-and-forget write
+// that fills it in later. A ledger write failure must not be able to corrupt a completed stream,
+// so this never throws, only logs. `ignoreDuplicates` is postgrest-js's spelling of INSERT ...
+// ON CONFLICT DO NOTHING, the same shape provisioningClaim.ts's claimProvisioning already uses,
+// keyed here on idempotency_key rather than workos_user_id.
 export async function insertUsageEvent(
   supabase: SupabaseClient,
   row: Record<string, unknown>,
