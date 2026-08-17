@@ -5,35 +5,25 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *
  * Polar's subscriptions.create takes only {metadata, productId, externalCustomerId} — no
  * idempotency key — and it does not reject a duplicate: asked seventeen times it creates
- * seventeen subscriptions. So the barrier has to be ours. This is the standard fallback when
- * a payments API has no idempotency key: derive a deterministic key for the logical
- * operation (here, the WorkOS user id), claim it atomically under a unique constraint, and
- * let only the winner perform the side effect.
+ * seventeen subscriptions (measured against a real account, apps/portal/lib/provisioningClaim.ts).
+ * So the barrier has to be ours.
  *
- * Measured, not theorised: one browser navigation in Next dev fanned out into parallel
- * renders that created 17 Free subscriptions inside 3.3 seconds. It is not a
- * two-simultaneous-visits problem. It was also not propagation lag — a fresh customer's
- * subscription is visible to getStateExternal on the very first read.
- *
- * NOTE: provisioning_claims is the only table the portal writes. `account_status` remains
- * single-writer — the Polar webhook in apps/server — and nothing here may change that.
- *
- * provisioning_claims itself is co-owned: apps/server/lib/provisioningClaim.ts duplicates this
- * file's four functions verbatim against the same table, because the gateway route runs the
- * identical "create this WorkOS user's Free subscription" operation from its own request path.
- * A barrier only bars if every writer of the operation it guards shares it — two claim tables,
- * one per app, would not serialize against each other, so a portal render and a gateway request
- * racing would each win their own claim and each call subscriptions.create.
+ * This table is co-owned with apps/portal, which runs the identical "create this WorkOS user's
+ * Free subscription" operation from its own render path. A second, server-owned claim table
+ * would not serialize against the portal's: two barriers keyed on two different tables do not
+ * bar each other, so a portal render and a gateway request racing would each win their own
+ * claim and each call subscriptions.create — the exact duplicate this barrier exists to
+ * prevent, now across apps. The unique constraint on workos_user_id is what makes the claim
+ * atomic, and it is shared by construction the moment both apps write the same table — a
+ * barrier shared across both writers is the only kind that bars.
  */
 
 /*
- * How long a `pending` claim is honoured before another render may take it over.
+ * How long a `pending` claim is honoured before another caller may take it over.
  *
  * A claim is held across exactly one Polar call, so this only has to exceed the longest such
  * call that could still be in flight. Serverless invocations are killed well inside a minute,
- * so after 60s a pending claim means the claimant is gone rather than slow. Shorter would
- * risk two live renders both provisioning; much longer would strand a user behind a dead
- * claim for no reason, since the repair costs them a page refresh.
+ * so after 60s a pending claim means the claimant is gone rather than slow.
  */
 const STALE_CLAIM_MS = 60_000;
 
@@ -87,21 +77,8 @@ async function reclaimStale(supabase: SupabaseClient, workosUserId: string): Pro
 
 /*
  * Releases the claim by deleting it, because the claim's lifetime is the operation's, not the
- * customer's.
- *
- * This used to set state = "done" and leave the row behind forever, which quietly made the
- * barrier permanent: the insert then always conflicts, and reclaimStale only matches
- * `pending`, so claimProvisioning answered false for that user on every later visit. The
- * customer was then routed down ensureProvisioned's loser branch, which reports Free without
- * creating anything — so an abandoned checkout (whose free subscription createCheckout had
- * already revoked) or a lapsed paid subscription left them reading "You're on Free" against
- * a Polar account holding nothing at all, permanently, on every page load. The one branch
- * that repairs that is the one the barrier was blocking.
- *
- * Deleting is safe against the duplicate-creation problem the barrier exists for, because
- * after this point the subscription itself is the guard: ensureProvisioned returns at the
- * activeSubscriptions read long before it reaches a claim, and that read was measured to see
- * a fresh customer's subscription on the very first call.
+ * customer's — apps/portal/lib/provisioningClaim.ts's own comment on why leaving a "done" row
+ * behind quietly makes the barrier permanent still applies here, being the same table.
  */
 export async function completeProvisioning(
   supabase: SupabaseClient,
@@ -115,9 +92,9 @@ export async function completeProvisioning(
 }
 
 /*
- * Hands the claim back when provisioning failed, so the next render retries immediately
- * rather than waiting out the stale window. Best effort: the caller is already throwing the
- * real error, and losing this only costs the delay the stale takeover exists to bound.
+ * Hands the claim back when provisioning failed, so the next caller retries immediately rather
+ * than waiting out the stale window. Best effort: the caller is already throwing the real
+ * error, and losing this only costs the delay the stale takeover exists to bound.
  */
 export async function releaseProvisioning(
   supabase: SupabaseClient,
