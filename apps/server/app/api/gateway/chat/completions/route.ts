@@ -14,7 +14,7 @@ import {
 } from "../../../../../lib/entitlement";
 import { getPolarClient } from "../../../../../lib/polar";
 import { getSupabaseClient } from "../../../../../lib/supabase";
-import { insertUsageEvent } from "../../../../../lib/usageLedger";
+import { insertUsageEvent, updateUsageEvent } from "../../../../../lib/usageLedger";
 
 // `Number(x) || 50` would silently turn SERI_FREE_DAILY_REQUESTS=0 into 50 — 0 is falsy in JS —
 // making a deliberately-zeroed cap (the natural negative-control value) impossible to set.
@@ -80,9 +80,9 @@ export function decidePreflight(input: PreflightInput): PreflightDecision {
   return { allow: true };
 }
 
-// The raw OpenAI-compatible /chat/completions `usage` object OpenRouter forwards verbatim
-// (D3): standard prompt_tokens/completion_tokens plus OpenRouter's own `cost` extension and
-// OpenAI's cached-token convention for cache reads.
+// The raw OpenAI-compatible /chat/completions `usage` object OpenRouter forwards verbatim:
+// standard prompt_tokens/completion_tokens plus OpenRouter's own `cost` extension and OpenAI's
+// cached-token convention for cache reads.
 type RawUsage = {
   prompt_tokens?: number;
   completion_tokens?: number;
@@ -125,8 +125,8 @@ export function usageRowFrom(args: {
     cache_read_tokens: raw?.prompt_tokens_details?.cached_tokens ?? 0,
     cost_usd: costFromUsage(args.usage, args.entry),
     request_id: args.requestId,
-    // synced_to_billing_at left unset: NULL is the reconcile queue the column exists for (D5),
-    // not written here.
+    // synced_to_billing_at left unset: NULL is the reconcile queue the column exists for, and
+    // no consumer reads that queue yet — nothing writes it here.
   };
 }
 
@@ -256,9 +256,35 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   }
 
   const sessionId = request.headers.get("X-Seri-Session-Id") ?? "";
-  const idempotencyKey = request.headers.get("X-Seri-Idempotency-Key") ?? crypto.randomUUID();
+  // Minted here, unconditionally — never trusted from the caller. A client sending the same
+  // X-Seri-Idempotency-Key on every request would otherwise collapse every usage_events row
+  // into one via the ledger's ON CONFLICT DO NOTHING, so countRequestsToday and
+  // sumSpendThisMonth would never advance past the first request — defeating both the Free
+  // daily-count cap and the paid spend cap entirely. The CLI may still send that header for its
+  // own tracing; nothing here reads it.
+  const idempotencyKey = crypto.randomUUID();
   const forwardBody: Record<string, unknown> = { ...body, session_id: sessionId };
   if (stream) forwardBody.stream_options = { include_usage: true };
+
+  // Written before the upstream call, with zero usage/cost, so an aborted or disconnected
+  // request still counts as one attempt against the Free daily-count cap — a client that
+  // cancels mid-stream skips the TransformStream's flush() below entirely, and without this
+  // row nothing would ever record that attempt happened. The completion paths below only ever
+  // UPDATE this same row (keyed on idempotencyKey), never insert a second one. An aborted paid
+  // request keeps this row's provisional (zero) cost — full mid-stream cost tracking would need
+  // parsing token deltas as they arrive, which this does not do; only the Free-tier request
+  // count is guaranteed accurate on abort, not a paid request's exact spend.
+  await insertUsageEvent(
+    supabase,
+    usageRowFrom({
+      idempotencyKey,
+      userId: identity.userId,
+      modelId,
+      usage: undefined,
+      entry,
+      requestId: null,
+    }),
+  );
 
   const upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -270,7 +296,8 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     signal: request.signal,
   });
 
-  // A non-OK upstream response is returned to the caller as-is, and writes no usage row.
+  // A non-OK upstream response is returned to the caller as-is. The provisional row above
+  // already recorded the attempt; nothing further is written here.
   if (!upstream.ok || !upstream.body) {
     return new Response(upstream.body, {
       status: upstream.status,
@@ -284,8 +311,9 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     const usageTap = createUsageTap((usage) => {
       // Not awaited: the response has already streamed to the caller by the time flush() runs,
       // so a ledger write failure must not be able to affect it either way.
-      void insertUsageEvent(
+      void updateUsageEvent(
         supabase,
+        idempotencyKey,
         usageRowFrom({ idempotencyKey, userId: identity.userId, modelId, usage, entry, requestId }),
       );
     });
@@ -295,11 +323,12 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   }
 
   const json = await upstream.json();
-  // Not awaited, same as the streaming path above: insertUsageEvent already logs its own
+  // Not awaited, same as the streaming path above: updateUsageEvent already logs its own
   // failures rather than throwing, so awaiting it here would only delay the response for no
   // benefit.
-  void insertUsageEvent(
+  void updateUsageEvent(
     supabase,
+    idempotencyKey,
     usageRowFrom({
       idempotencyKey,
       userId: identity.userId,

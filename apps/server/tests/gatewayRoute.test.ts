@@ -14,7 +14,7 @@ import {
   usageRowFrom,
 } from "../app/api/gateway/chat/completions/route";
 import type { AccountForToken } from "../lib/accountStatus";
-import { insertUsageEvent } from "../lib/usageLedger";
+import { insertUsageEvent, updateUsageEvent } from "../lib/usageLedger";
 
 function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   return {
@@ -388,6 +388,45 @@ describe("insertUsageEvent", () => {
   });
 });
 
+describe("updateUsageEvent", () => {
+  function fakeSupabase(error: unknown = null) {
+    const calls: { row: Record<string, unknown>; idempotencyKey: string }[] = [];
+    const client = {
+      from: () => ({
+        update: (row: Record<string, unknown>) => ({
+          eq: (_column: string, value: string) => {
+            calls.push({ row, idempotencyKey: value });
+            return Promise.resolve({ data: null, error });
+          },
+        }),
+      }),
+    };
+    return { client: client as unknown as SupabaseClient, calls };
+  }
+
+  test("issues exactly one update filtered on idempotency_key", async () => {
+    const { client, calls } = fakeSupabase();
+
+    await updateUsageEvent(client, "idem-1", { input_tokens: 5 });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.idempotencyKey).toBe("idem-1");
+    expect(calls[0]?.row).toEqual({ input_tokens: 5 });
+  });
+
+  test("logs and resolves, never rejects, on a Supabase error", async () => {
+    const { client } = fakeSupabase(new Error("write failed"));
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+
+    await expect(updateUsageEvent(client, "idem-1", { input_tokens: 5 })).resolves.toBeUndefined();
+
+    console.error = original;
+    expect(errors).toHaveLength(1);
+  });
+});
+
 /*
  * handlePost-level tests, injecting every dependency the route resolves via RouteDeps. This is
  * the one place this file deviates from "test the exports, never the opaque route handler" — a
@@ -411,6 +450,7 @@ function fakeUsageSupabase(opts: { count?: number; costRows?: { cost_usd: number
           }),
         }),
         upsert: () => Promise.resolve({ data: null, error: null }),
+        update: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }),
       };
     },
   };
@@ -438,6 +478,39 @@ function gatewayRequest(body: unknown, headers: Record<string, string> = {}): Re
     headers: { "Content-Type": "application/json", Authorization: "Bearer real-token", ...headers },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
+}
+
+// Unlike fakeUsageSupabase, this records every upsert/update call rather than answering from
+// fixed opts — needed to assert on idempotency_key values and call counts directly.
+function fakeUsageSupabaseTracking() {
+  const upserts: Record<string, unknown>[] = [];
+  const updates: { row: Record<string, unknown>; idempotencyKey: string }[] = [];
+  const client = {
+    from: (table: string) => {
+      if (table !== "usage_events") throw new Error(`unexpected table ${table}`);
+      return {
+        select: (_columns: string, selectOpts?: { count?: string; head?: boolean }) => ({
+          eq: () => ({
+            gte: () =>
+              selectOpts?.head
+                ? Promise.resolve({ count: 0, data: null, error: null })
+                : Promise.resolve({ data: [], error: null }),
+          }),
+        }),
+        upsert: (row: Record<string, unknown>) => {
+          upserts.push(row);
+          return Promise.resolve({ data: null, error: null });
+        },
+        update: (row: Record<string, unknown>) => ({
+          eq: (_column: string, value: string) => {
+            updates.push({ row, idempotencyKey: value });
+            return Promise.resolve({ data: null, error: null });
+          },
+        }),
+      };
+    },
+  };
+  return { client: client as unknown as SupabaseClient, upserts, updates };
 }
 
 function neverFetch(): typeof fetch {
@@ -693,5 +766,92 @@ describe("handlePost — stale compression headers are not forwarded", () => {
     expect(response.status).toBe(502);
     expect(response.headers.get("content-encoding")).toBeNull();
     expect(response.headers.get("content-length")).toBeNull();
+  });
+});
+
+function completedNonStreamResponse(): Response {
+  return new Response(
+    JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+describe("handlePost — the idempotency key is minted server-side, never trusted from the client", () => {
+  beforeAll(() => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+  });
+  afterAll(() => {
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+  });
+
+  // A client sending a constant X-Seri-Idempotency-Key on every request would otherwise
+  // collapse every usage_events row into one via the ledger's ON CONFLICT DO NOTHING —
+  // countRequestsToday and sumSpendThisMonth would never advance past the first request,
+  // defeating both quota checks entirely.
+  test("two requests carrying the SAME X-Seri-Idempotency-Key header still produce two separate usage_events rows", async () => {
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking();
+    const fetchFn = (async () => completedNonStreamResponse()) as unknown as typeof fetch;
+    const deps = {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    };
+    const clientHeaders = { "X-Seri-Idempotency-Key": "client-constant-key" };
+
+    await handlePost(gatewayRequest({ model: "m" }, clientHeaders), deps);
+    await handlePost(gatewayRequest({ model: "m" }, clientHeaders), deps);
+
+    expect(upserts).toHaveLength(2);
+    const keys = upserts.map((row) => row.idempotency_key);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+});
+
+describe("handlePost — aborting mid-stream still writes the attempt", () => {
+  beforeAll(() => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+  });
+  afterAll(() => {
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+  });
+
+  // The usage tap's flush() only fires on normal stream completion, never on cancellation — a
+  // client that disconnects mid-generation must still leave the provisional row insertUsageEvent
+  // wrote before the upstream call started, or the request counts against neither the Free
+  // daily-count cap nor a paid plan's spend despite real tokens having been generated. A paid
+  // plan is used here to reach the upstream call without needing a real (network-fetched)
+  // catalog entry — the mechanism under test (the provisional row) runs identically for Free,
+  // since it is written before decidePreflight's plan-specific checks are ever consulted again.
+  test("aborting the response body before it completes leaves exactly one usage_events row", async () => {
+    const { client: supabase, upserts, updates } = fakeUsageSupabaseTracking();
+    // Enqueues one partial chunk and then never closes — models an in-progress generation the
+    // client abandons before the SSE stream's final `usage` frame ever arrives.
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'),
+        );
+      },
+    });
+    const fetchFn = (async () =>
+      new Response(upstreamBody, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      })) as unknown as typeof fetch;
+
+    const response = await handlePost(gatewayRequest({ model: "m", stream: true }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    const reader = response.body?.getReader();
+    await reader?.read();
+    await reader?.cancel();
+
+    expect(upserts).toHaveLength(1);
+    expect(updates).toHaveLength(0);
   });
 });
