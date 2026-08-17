@@ -18,11 +18,17 @@ import { insertUsageEvent } from "../../../../../lib/usageLedger";
 
 // `Number(x) || 50` would silently turn SERI_FREE_DAILY_REQUESTS=0 into 50 — 0 is falsy in JS —
 // making a deliberately-zeroed cap (the natural negative-control value) impossible to set.
+// `Number("")` is 0 too (an unset/blank env assignment reads as an empty string, not undefined),
+// so blank is checked explicitly rather than relying on Number.isFinite to catch it — and a
+// negative override is clamped to 0 rather than trusted, since decidePreflight's
+// `requestsToday >= cap` check treats a negative cap as "always allow", not "always refuse".
 // Default 50: docs-tmp/pricing-tiers.md states outright this number is a guess to be
 // instrumented, not a measured budget.
 export function resolveFreeDailyCap(raw: string | undefined): number {
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : 50;
+  const trimmed = raw?.trim();
+  if (!trimmed) return 50;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? Math.max(0, n) : 50;
 }
 
 export const FREE_DAILY_REQUEST_CAP = resolveFreeDailyCap(process.env.SERI_FREE_DAILY_REQUESTS);
@@ -179,9 +185,8 @@ function forwardableHeaders(headers: Headers): Headers {
 }
 
 // Optional injected dependencies, defaulting to the real singletons — the same
-// override-with-a-default seam every provider/*.ts file already uses. Next.js calls
-// `POST(request)` with exactly one argument, so production behaviour is unchanged; tests use
-// this to exercise the route's own control flow (e.g. "every refusal path calls fetch zero
+// override-with-a-default seam every provider/*.ts file already uses. Tests call handlePost
+// directly to exercise the route's own control flow (e.g. "every refusal path calls fetch zero
 // times") without a real Supabase/Polar/network round trip.
 export type RouteDeps = {
   supabase?: SupabaseClient;
@@ -190,7 +195,13 @@ export type RouteDeps = {
   fetchFn?: typeof fetch;
 };
 
-export async function POST(request: Request, deps: RouteDeps = {}): Promise<Response> {
+// Next.js's build-time route-handler validator checks POST's declared signature against its
+// own expected `(request, context)` shape, not just how it's called at runtime — a second
+// parameter that doesn't match that shape fails `next build` even though nothing in this repo
+// ever passes one. handlePost carries the real logic and the deps seam; the exported POST is
+// the one-argument shape Next.js requires, matching apps/server/app/api/webhooks/polar/route.ts's
+// own split between its exported pure functions and its framework-facing POST.
+export async function handlePost(request: Request, deps: RouteDeps = {}): Promise<Response> {
   const supabase = deps.supabase ?? getSupabaseClient();
   const polar = deps.polar ?? getPolarClient();
   const getAccountForToken = deps.getAccountForToken ?? getAccountForTokenReal;
@@ -300,3 +311,5 @@ export async function POST(request: Request, deps: RouteDeps = {}): Promise<Resp
   );
   return Response.json(json, { headers: forwardableHeaders(upstream.headers) });
 }
+
+export const POST = (request: Request): Promise<Response> => handlePost(request);

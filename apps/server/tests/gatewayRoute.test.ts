@@ -8,8 +8,8 @@ import {
   createUsageTap,
   decidePreflight,
   FREE_DAILY_REQUEST_CAP,
+  handlePost,
   isZeroPriceModel,
-  POST,
   resolveFreeDailyCap,
   usageRowFrom,
 } from "../app/api/gateway/chat/completions/route";
@@ -79,6 +79,19 @@ describe("resolveFreeDailyCap", () => {
 
   test("falls back to 50 for a non-numeric value", () => {
     expect(resolveFreeDailyCap("not-a-number")).toBe(50);
+  });
+
+  // `Number("")` is 0, same as `Number("0")` — a blank env assignment must not silently zero
+  // the cap the way an explicit "0" deliberately does.
+  test("falls back to 50 for a blank string", () => {
+    expect(resolveFreeDailyCap("")).toBe(50);
+    expect(resolveFreeDailyCap("   ")).toBe(50);
+  });
+
+  // Negative passes Number.isFinite, so it needs its own clamp — decidePreflight's
+  // `requestsToday >= cap` check would otherwise read a negative cap as "always allow".
+  test("clamps a negative override to 0", () => {
+    expect(resolveFreeDailyCap("-5")).toBe(0);
   });
 });
 
@@ -376,11 +389,13 @@ describe("insertUsageEvent", () => {
 });
 
 /*
- * POST-level tests, injecting every dependency the route resolves via RouteDeps. This is the
- * one place this file deviates from "test the exports, never the opaque POST" — a property
- * about the ROUTE'S OWN CONTROL FLOW (does it call fetch at all; does a response ever carry a
- * header it should not) cannot be observed by calling decidePreflight/usageRowFrom/etc.
- * directly, since those are pure functions with no fetch or Response of their own.
+ * handlePost-level tests, injecting every dependency the route resolves via RouteDeps. This is
+ * the one place this file deviates from "test the exports, never the opaque route handler" — a
+ * property about the ROUTE'S OWN CONTROL FLOW (does it call fetch at all; does a response ever
+ * carry a header it should not) cannot be observed by calling decidePreflight/usageRowFrom/etc.
+ * directly, since those are pure functions with no fetch or Response of their own. The exported
+ * POST itself stays untested and un-parameterized, matching what Next.js's build-time route
+ * validator requires.
  */
 function fakeUsageSupabase(opts: { count?: number; costRows?: { cost_usd: number }[] } = {}) {
   const client = {
@@ -434,7 +449,7 @@ function neverFetch(): typeof fetch {
 // getModelCatalog() reads process.env.SERI_DISABLE_MODELS_FETCH itself (via @seri/model-catalog's
 // loadCatalog), so this is the same no-real-HTTP-cycle guard apps/cli's own root test script
 // already sets globally — apps/server's does not, so it is set here for the tests that reach it.
-describe("POST — refusal paths call the upstream fetch zero times", () => {
+describe("handlePost — refusal paths call the upstream fetch zero times", () => {
   beforeAll(() => {
     process.env.SERI_DISABLE_MODELS_FETCH = "1";
   });
@@ -445,7 +460,7 @@ describe("POST — refusal paths call the upstream fetch zero times", () => {
   test("missing Authorization header: 401 unauthenticated, zero upstream calls", async () => {
     const fetchFn = neverFetch();
 
-    const response = await POST(gatewayRequest({ model: "m" }, { Authorization: "" }), {
+    const response = await handlePost(gatewayRequest({ model: "m" }, { Authorization: "" }), {
       supabase: fakeUsageSupabase(),
       polar: fakePolarWith([]),
       fetchFn,
@@ -458,7 +473,7 @@ describe("POST — refusal paths call the upstream fetch zero times", () => {
   test("a malformed token: 401 token_invalid, zero upstream calls", async () => {
     const fetchFn = neverFetch();
 
-    const response = await POST(
+    const response = await handlePost(
       gatewayRequest({ model: "m" }, { Authorization: "Bearer not-a-jwt" }),
       {
         supabase: fakeUsageSupabase(),
@@ -474,7 +489,7 @@ describe("POST — refusal paths call the upstream fetch zero times", () => {
   test("a malformed JSON body: 400 invalid_body, zero upstream calls", async () => {
     const fetchFn = neverFetch();
 
-    const response = await POST(gatewayRequest("not json"), {
+    const response = await handlePost(gatewayRequest("not json"), {
       supabase: fakeUsageSupabase(),
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
@@ -488,7 +503,7 @@ describe("POST — refusal paths call the upstream fetch zero times", () => {
   test("a product this deployment cannot name: 402 unknown_plan, zero upstream calls", async () => {
     const fetchFn = neverFetch();
 
-    const response = await POST(gatewayRequest({ model: "m" }), {
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
       supabase: fakeUsageSupabase(),
       polar: fakePolarWith([{ id: "sub_x", productId: "prod_unrecognized" }]),
       getAccountForToken: identityStub(fakeIdentity()),
@@ -502,7 +517,7 @@ describe("POST — refusal paths call the upstream fetch zero times", () => {
   test("at the Free daily cap: 402 free_daily_cap, zero upstream calls", async () => {
     const fetchFn = neverFetch();
 
-    const response = await POST(gatewayRequest({ model: "m" }), {
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
       supabase: fakeUsageSupabase({ count: FREE_DAILY_REQUEST_CAP }),
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
@@ -516,7 +531,7 @@ describe("POST — refusal paths call the upstream fetch zero times", () => {
   test("a priced model on Free: 402 model_not_in_free_tier, zero upstream calls", async () => {
     const fetchFn = neverFetch();
 
-    const response = await POST(gatewayRequest({ model: "openai/gpt-5" }), {
+    const response = await handlePost(gatewayRequest({ model: "openai/gpt-5" }), {
       supabase: fakeUsageSupabase({ count: 0 }),
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
@@ -531,7 +546,7 @@ describe("POST — refusal paths call the upstream fetch zero times", () => {
     const fetchFn = neverFetch();
     const allowance = PLAN_MONTHLY_USD.pro * INCLUDED_SPEND_RATIO;
 
-    const response = await POST(gatewayRequest({ model: "m" }), {
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
       supabase: fakeUsageSupabase({ costRows: [{ cost_usd: allowance }] }),
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
@@ -543,7 +558,7 @@ describe("POST — refusal paths call the upstream fetch zero times", () => {
   });
 });
 
-describe("POST — the upstream Authorization header is never echoed back to the caller", () => {
+describe("handlePost — the upstream Authorization header is never echoed back to the caller", () => {
   const originalKey = process.env.SERI_OPENROUTER_API_KEY;
 
   beforeAll(() => {
@@ -574,7 +589,7 @@ describe("POST — the upstream Authorization header is never echoed back to the
 
     // A paid plan under its allowance reaches the upstream call without needing a real catalog
     // entry — the dollar rule alone decides it.
-    const response = await POST(gatewayRequest({ model: "m" }), {
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
       supabase: fakeUsageSupabase({ costRows: [] }),
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
@@ -588,7 +603,7 @@ describe("POST — the upstream Authorization header is never echoed back to the
   });
 });
 
-describe("POST — stale compression headers are not forwarded", () => {
+describe("handlePost — stale compression headers are not forwarded", () => {
   beforeAll(() => {
     process.env.SERI_DISABLE_MODELS_FETCH = "1";
   });
@@ -600,7 +615,7 @@ describe("POST — stale compression headers are not forwarded", () => {
   // the original (compressed) Content-Length on the Headers object it hands back. Forwarding
   // those verbatim alongside an already-decompressed (here: re-serialized) body is a real
   // mismatch that can break the caller's decode.
-  test("content-encoding and content-length from the upstream response are stripped", async () => {
+  test("non-streaming: content-encoding and content-length from the upstream response are stripped", async () => {
     const fetchFn = (async () =>
       new Response(JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }), {
         status: 200,
@@ -611,13 +626,71 @@ describe("POST — stale compression headers are not forwarded", () => {
         },
       })) as unknown as typeof fetch;
 
-    const response = await POST(gatewayRequest({ model: "m" }), {
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
       supabase: fakeUsageSupabase({ costRows: [] }),
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
       fetchFn,
     });
 
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
+  });
+
+  // The CLI always streams (createOpenAI's chat model sets stream: true), so this is the path
+  // that actually matters in production — the non-streaming test above alone does not exercise
+  // it, since streaming builds its Response from a different call site in the route.
+  test("streaming: content-encoding and content-length from the upstream response are stripped", async () => {
+    const sseBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{}}]}\n\n'));
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const fetchFn = (async () =>
+      new Response(sseBody, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Content-Encoding": "gzip",
+          "Content-Length": "9999",
+        },
+      })) as unknown as typeof fetch;
+
+    const response = await handlePost(gatewayRequest({ model: "m", stream: true }), {
+      supabase: fakeUsageSupabase({ costRows: [] }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+    await response.text();
+
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
+  });
+
+  // The early passthrough for a non-OK upstream response is a third, independent call site that
+  // also forwards upstream.headers.
+  test("non-OK passthrough: content-encoding and content-length from the upstream response are stripped", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "upstream failure" }), {
+        status: 502,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Encoding": "gzip",
+          "Content-Length": "9999",
+        },
+      })) as unknown as typeof fetch;
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase: fakeUsageSupabase({ costRows: [] }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(502);
     expect(response.headers.get("content-encoding")).toBeNull();
     expect(response.headers.get("content-length")).toBeNull();
   });
