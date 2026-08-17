@@ -201,6 +201,22 @@ describe("resolveEntitlement", () => {
     expect(claims.size).toBe(0);
   });
 
+  // The other half of the same branch: a customer that already exists (Polar's own state read
+  // came back non-null) but holds zero subscriptions must not be re-created — customers.create
+  // is only for a customer getCustomerState never found at all.
+  test("no active subscription but the customer already exists: creates only the subscription", async () => {
+    const { client: supabase } = fakeSupabase();
+    const { client: polar, calls } = fakePolar([{ activeSubscriptions: [] }]);
+
+    const result = await resolveEntitlement(deps(supabase, polar), IDENTITY);
+
+    expect(result).toEqual({ plan: "free", provisioned: true });
+    expect(calls.map((c) => c.method)).toEqual([
+      "customers.getStateExternal",
+      "subscriptions.create",
+    ]);
+  });
+
   // The negative control for the case above: a route that simply refuses instead of
   // provisioning would report a null/false result here rather than "free"/provisioned: true.
   test("negative control: the auto-provision result is not what a refusing route would return", async () => {

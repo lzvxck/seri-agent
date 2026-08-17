@@ -1,6 +1,11 @@
+import type { Polar } from "@polar-sh/sdk";
 import { findCatalogEntry, type ModelCatalog, type ModelCatalogEntry } from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD, type Plan } from "@seri/plans";
-import { getAccountForToken } from "../../../../../lib/accountStatus";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  type AccountForToken,
+  getAccountForToken as getAccountForTokenReal,
+} from "../../../../../lib/accountStatus";
 import { getModelCatalog } from "../../../../../lib/catalog";
 import {
   countRequestsToday,
@@ -11,9 +16,16 @@ import { getPolarClient } from "../../../../../lib/polar";
 import { getSupabaseClient } from "../../../../../lib/supabase";
 import { insertUsageEvent } from "../../../../../lib/usageLedger";
 
+// `Number(x) || 50` would silently turn SERI_FREE_DAILY_REQUESTS=0 into 50 — 0 is falsy in JS —
+// making a deliberately-zeroed cap (the natural negative-control value) impossible to set.
 // Default 50: docs-tmp/pricing-tiers.md states outright this number is a guess to be
 // instrumented, not a measured budget.
-export const FREE_DAILY_REQUEST_CAP = Number(process.env.SERI_FREE_DAILY_REQUESTS) || 50;
+export function resolveFreeDailyCap(raw: string | undefined): number {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 50;
+}
+
+export const FREE_DAILY_REQUEST_CAP = resolveFreeDailyCap(process.env.SERI_FREE_DAILY_REQUESTS);
 
 // A missing catalog entry, or an entry whose `pricing` is `undefined` (which means "unknown",
 // not "free"), is NOT zero-price — fail closed, the same posture catalog.ts's empty-manifest
@@ -134,7 +146,9 @@ function parseFinalUsage(tail: string): unknown {
   return undefined;
 }
 
-function createUsageTap(
+// Exported so a test can feed it a truncated tail directly, matching this module's
+// test-the-exports convention.
+export function createUsageTap(
   onUsage: (usage: unknown) => void,
 ): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
@@ -151,20 +165,54 @@ function createUsageTap(
   });
 }
 
-export async function POST(request: Request): Promise<Response> {
+// `fetch` transparently decompresses a gzip'd upstream body but leaves Content-Encoding and the
+// original (compressed) Content-Length on the Headers object it hands back — forwarding those
+// verbatim alongside an already-decompressed (or, on the non-streaming path, re-serialized)
+// body is a real mismatch that can break the caller's decode. Stripped here rather than
+// negotiated away with our own Accept-Encoding, since the non-streaming path re-serializes the
+// JSON body regardless of whether OpenRouter compressed the original response.
+function forwardableHeaders(headers: Headers): Headers {
+  const copy = new Headers(headers);
+  copy.delete("content-encoding");
+  copy.delete("content-length");
+  return copy;
+}
+
+// Optional injected dependencies, defaulting to the real singletons — the same
+// override-with-a-default seam every provider/*.ts file already uses. Next.js calls
+// `POST(request)` with exactly one argument, so production behaviour is unchanged; tests use
+// this to exercise the route's own control flow (e.g. "every refusal path calls fetch zero
+// times") without a real Supabase/Polar/network round trip.
+export type RouteDeps = {
+  supabase?: SupabaseClient;
+  polar?: Polar;
+  getAccountForToken?: (supabase: SupabaseClient, token: string) => Promise<AccountForToken | null>;
+  fetchFn?: typeof fetch;
+};
+
+export async function POST(request: Request, deps: RouteDeps = {}): Promise<Response> {
+  const supabase = deps.supabase ?? getSupabaseClient();
+  const polar = deps.polar ?? getPolarClient();
+  const getAccountForToken = deps.getAccountForToken ?? getAccountForTokenReal;
+  const fetchFn = deps.fetchFn ?? fetch;
+
   const auth = request.headers.get("Authorization");
   const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined;
   if (!token) {
     return Response.json({ code: "unauthenticated" }, { status: 401 });
   }
 
-  const supabase = getSupabaseClient();
   const identity = await getAccountForToken(supabase, token);
   if (!identity) {
     return Response.json({ code: "token_invalid" }, { status: 401 });
   }
 
-  const body = await request.json();
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ code: "invalid_body" }, { status: 400 });
+  }
   const modelId = typeof body.model === "string" ? body.model : undefined;
   if (!modelId) {
     return Response.json({ code: "missing_model" }, { status: 400 });
@@ -177,10 +225,7 @@ export async function POST(request: Request): Promise<Response> {
     POLAR_PRODUCT_MAX: process.env.POLAR_PRODUCT_MAX,
     POLAR_PRODUCT_ULTRA: process.env.POLAR_PRODUCT_ULTRA,
   };
-  const entitlement = await resolveEntitlement(
-    { supabase, polar: getPolarClient(), products },
-    identity,
-  );
+  const entitlement = await resolveEntitlement({ supabase, polar, products }, identity);
   const plan = entitlement.plan;
   if (!plan) {
     return Response.json({ code: "unknown_plan" }, { status: 402 });
@@ -204,7 +249,7 @@ export async function POST(request: Request): Promise<Response> {
   const forwardBody: Record<string, unknown> = { ...body, session_id: sessionId };
   if (stream) forwardBody.stream_options = { include_usage: true };
 
-  const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.SERI_OPENROUTER_API_KEY}`,
@@ -216,22 +261,32 @@ export async function POST(request: Request): Promise<Response> {
 
   // A non-OK upstream response is returned to the caller as-is, and writes no usage row.
   if (!upstream.ok || !upstream.body) {
-    return new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: forwardableHeaders(upstream.headers),
+    });
   }
 
   const requestId = upstream.headers.get("x-request-id");
 
   if (stream) {
     const usageTap = createUsageTap((usage) => {
+      // Not awaited: the response has already streamed to the caller by the time flush() runs,
+      // so a ledger write failure must not be able to affect it either way.
       void insertUsageEvent(
         supabase,
         usageRowFrom({ idempotencyKey, userId: identity.userId, modelId, usage, entry, requestId }),
       );
     });
-    return new Response(upstream.body.pipeThrough(usageTap), { headers: upstream.headers });
+    return new Response(upstream.body.pipeThrough(usageTap), {
+      headers: forwardableHeaders(upstream.headers),
+    });
   }
 
   const json = await upstream.json();
+  // Not awaited, same as the streaming path above: insertUsageEvent already logs its own
+  // failures rather than throwing, so awaiting it here would only delay the response for no
+  // benefit.
   void insertUsageEvent(
     supabase,
     usageRowFrom({
@@ -243,5 +298,5 @@ export async function POST(request: Request): Promise<Response> {
       requestId,
     }),
   );
-  return Response.json(json, { headers: upstream.headers });
+  return Response.json(json, { headers: forwardableHeaders(upstream.headers) });
 }

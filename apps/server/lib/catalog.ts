@@ -7,6 +7,8 @@ const EMPTY_MANIFEST: ModelCatalog = { fetchedAt: "", entries: [] };
 
 // loadCatalog already caches the in-flight promise itself (process-lifetime), so this only
 // needs to supply the two arguments a caller in this app would otherwise repeat everywhere.
+// "Process-lifetime" is per server instance: a cold start (a new deployment, an autoscaled
+// instance) refetches once and caches for its own lifetime, not across instances.
 export function getModelCatalog(): Promise<ModelCatalog> {
   return loadCatalog(EMPTY_MANIFEST, fetch);
 }

@@ -1,14 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { Polar } from "@polar-sh/sdk";
 import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PAID_PLANS, PLAN_MONTHLY_USD } from "@seri/plans";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   costFromUsage,
+  createUsageTap,
   decidePreflight,
   FREE_DAILY_REQUEST_CAP,
   isZeroPriceModel,
+  POST,
+  resolveFreeDailyCap,
   usageRowFrom,
 } from "../app/api/gateway/chat/completions/route";
+import type { AccountForToken } from "../lib/accountStatus";
 import { insertUsageEvent } from "../lib/usageLedger";
 
 function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
@@ -54,6 +59,26 @@ describe("isZeroPriceModel", () => {
 
   test("true when both input and output are zero", () => {
     expect(isZeroPriceModel(catalogWith(FREE_ENTRY), FREE_ENTRY.id)).toBe(true);
+  });
+});
+
+describe("resolveFreeDailyCap", () => {
+  test("falls back to 50 when unset", () => {
+    expect(resolveFreeDailyCap(undefined)).toBe(50);
+  });
+
+  // `Number(x) || 50` would silently turn "0" into 50 — 0 is falsy in JS — making a
+  // deliberately-zeroed cap (the natural negative-control value) impossible to set.
+  test("respects an explicit 0", () => {
+    expect(resolveFreeDailyCap("0")).toBe(0);
+  });
+
+  test("parses a positive override", () => {
+    expect(resolveFreeDailyCap("25")).toBe(25);
+  });
+
+  test("falls back to 50 for a non-numeric value", () => {
+    expect(resolveFreeDailyCap("not-a-number")).toBe(50);
   });
 });
 
@@ -268,6 +293,52 @@ describe("usageRowFrom", () => {
   });
 });
 
+function concatChunks(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+describe("createUsageTap", () => {
+  // The plan's own stated tradeoff: the transform enqueues every chunk before it inspects
+  // anything, so a truncated/malformed tail can only lose a usage row, never corrupt what the
+  // caller receives.
+  test("a truncated final usage frame is not written, and the passthrough is byte-identical", async () => {
+    const encoder = new TextEncoder();
+    const goodChunk = 'data: {"id":"1","choices":[{"delta":{"content":"hi"}}]}\n\n';
+    // Cut off mid-object — JSON.parse on this always throws.
+    const truncatedUsageChunk = 'data: {"id":"2","choices":[],"usage":{"prompt_tok';
+    const inputChunks = [encoder.encode(goodChunk), encoder.encode(truncatedUsageChunk)];
+
+    let usageCalls = 0;
+    const tap = createUsageTap(() => {
+      usageCalls++;
+    });
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of inputChunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+
+    const output: Uint8Array[] = [];
+    const reader = source.pipeThrough(tap).getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) output.push(value);
+    }
+
+    expect(new TextDecoder().decode(concatChunks(output))).toBe(goodChunk + truncatedUsageChunk);
+    expect(usageCalls).toBe(0);
+  });
+});
+
 describe("insertUsageEvent", () => {
   function fakeSupabase(error: unknown = null) {
     const calls: { row: Record<string, unknown>; opts: Record<string, unknown> }[] = [];
@@ -301,5 +372,253 @@ describe("insertUsageEvent", () => {
 
     console.error = original;
     expect(errors).toHaveLength(1);
+  });
+});
+
+/*
+ * POST-level tests, injecting every dependency the route resolves via RouteDeps. This is the
+ * one place this file deviates from "test the exports, never the opaque POST" — a property
+ * about the ROUTE'S OWN CONTROL FLOW (does it call fetch at all; does a response ever carry a
+ * header it should not) cannot be observed by calling decidePreflight/usageRowFrom/etc.
+ * directly, since those are pure functions with no fetch or Response of their own.
+ */
+function fakeUsageSupabase(opts: { count?: number; costRows?: { cost_usd: number }[] } = {}) {
+  const client = {
+    from: (table: string) => {
+      if (table !== "usage_events") throw new Error(`unexpected table ${table}`);
+      return {
+        select: (_columns: string, selectOpts?: { count?: string; head?: boolean }) => ({
+          eq: () => ({
+            gte: () =>
+              selectOpts?.head
+                ? Promise.resolve({ count: opts.count ?? 0, data: null, error: null })
+                : Promise.resolve({ data: opts.costRows ?? [], error: null }),
+          }),
+        }),
+        upsert: () => Promise.resolve({ data: null, error: null }),
+      };
+    },
+  };
+  return client as unknown as SupabaseClient;
+}
+
+function fakePolarWith(activeSubscriptions: { id: string; productId: string }[]) {
+  const client = {
+    customers: { getStateExternal: () => Promise.resolve({ activeSubscriptions }) },
+  };
+  return client as unknown as Polar;
+}
+
+function fakeIdentity(overrides: Partial<AccountForToken> = {}): AccountForToken {
+  return { userId: "user_1", email: "a@example.com", plan: null, status: null, ...overrides };
+}
+
+function identityStub(identity: AccountForToken | null) {
+  return async () => identity;
+}
+
+function gatewayRequest(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request("http://localhost/api/gateway/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer real-token", ...headers },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+function neverFetch(): typeof fetch {
+  return (async () => {
+    throw new Error("upstream fetch should not have been called");
+  }) as unknown as typeof fetch;
+}
+
+// getModelCatalog() reads process.env.SERI_DISABLE_MODELS_FETCH itself (via @seri/model-catalog's
+// loadCatalog), so this is the same no-real-HTTP-cycle guard apps/cli's own root test script
+// already sets globally — apps/server's does not, so it is set here for the tests that reach it.
+describe("POST — refusal paths call the upstream fetch zero times", () => {
+  beforeAll(() => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+  });
+  afterAll(() => {
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+  });
+
+  test("missing Authorization header: 401 unauthenticated, zero upstream calls", async () => {
+    const fetchFn = neverFetch();
+
+    const response = await POST(gatewayRequest({ model: "m" }, { Authorization: "" }), {
+      supabase: fakeUsageSupabase(),
+      polar: fakePolarWith([]),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ code: "unauthenticated" });
+  });
+
+  test("a malformed token: 401 token_invalid, zero upstream calls", async () => {
+    const fetchFn = neverFetch();
+
+    const response = await POST(
+      gatewayRequest({ model: "m" }, { Authorization: "Bearer not-a-jwt" }),
+      {
+        supabase: fakeUsageSupabase(),
+        polar: fakePolarWith([]),
+        fetchFn,
+      },
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ code: "token_invalid" });
+  });
+
+  test("a malformed JSON body: 400 invalid_body, zero upstream calls", async () => {
+    const fetchFn = neverFetch();
+
+    const response = await POST(gatewayRequest("not json"), {
+      supabase: fakeUsageSupabase(),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "invalid_body" });
+  });
+
+  test("a product this deployment cannot name: 402 unknown_plan, zero upstream calls", async () => {
+    const fetchFn = neverFetch();
+
+    const response = await POST(gatewayRequest({ model: "m" }), {
+      supabase: fakeUsageSupabase(),
+      polar: fakePolarWith([{ id: "sub_x", productId: "prod_unrecognized" }]),
+      getAccountForToken: identityStub(fakeIdentity()),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ code: "unknown_plan" });
+  });
+
+  test("at the Free daily cap: 402 free_daily_cap, zero upstream calls", async () => {
+    const fetchFn = neverFetch();
+
+    const response = await POST(gatewayRequest({ model: "m" }), {
+      supabase: fakeUsageSupabase({ count: FREE_DAILY_REQUEST_CAP }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ code: "free_daily_cap" });
+  });
+
+  test("a priced model on Free: 402 model_not_in_free_tier, zero upstream calls", async () => {
+    const fetchFn = neverFetch();
+
+    const response = await POST(gatewayRequest({ model: "openai/gpt-5" }), {
+      supabase: fakeUsageSupabase({ count: 0 }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ code: "model_not_in_free_tier" });
+  });
+
+  test("over the included-spend allowance on a paid plan: 402 allowance_exhausted, zero upstream calls", async () => {
+    const fetchFn = neverFetch();
+    const allowance = PLAN_MONTHLY_USD.pro * INCLUDED_SPEND_RATIO;
+
+    const response = await POST(gatewayRequest({ model: "m" }), {
+      supabase: fakeUsageSupabase({ costRows: [{ cost_usd: allowance }] }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ code: "allowance_exhausted" });
+  });
+});
+
+describe("POST — the upstream Authorization header is never echoed back to the caller", () => {
+  const originalKey = process.env.SERI_OPENROUTER_API_KEY;
+
+  beforeAll(() => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    process.env.SERI_OPENROUTER_API_KEY = "server-secret-key";
+  });
+  afterAll(() => {
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+    if (originalKey === undefined) delete process.env.SERI_OPENROUTER_API_KEY;
+    else process.env.SERI_OPENROUTER_API_KEY = originalKey;
+  });
+
+  test("the secret key reaches OpenRouter but never comes back in the response", async () => {
+    // An object, not a bare `let`: captured across an untraced callback boundary the same way
+    // deviceFlow.ts's own isAborted() comment describes, so a later read isn't over-narrowed to
+    // the initializer's type.
+    const captured: { auth: string | null } = { auth: null };
+    const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.auth = new Headers(init?.headers).get("Authorization");
+      return new Response(
+        JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    // A paid plan under its allowance reaches the upstream call without needing a real catalog
+    // entry — the dollar rule alone decides it.
+    const response = await POST(gatewayRequest({ model: "m" }), {
+      supabase: fakeUsageSupabase({ costRows: [] }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+    const text = await response.text();
+
+    expect(captured.auth).toBe("Bearer server-secret-key");
+    expect(response.headers.get("authorization")).toBeNull();
+    expect(text).not.toContain("server-secret-key");
+  });
+});
+
+describe("POST — stale compression headers are not forwarded", () => {
+  beforeAll(() => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+  });
+  afterAll(() => {
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+  });
+
+  // `fetch` transparently decompresses a gzip'd upstream body but leaves Content-Encoding and
+  // the original (compressed) Content-Length on the Headers object it hands back. Forwarding
+  // those verbatim alongside an already-decompressed (here: re-serialized) body is a real
+  // mismatch that can break the caller's decode.
+  test("content-encoding and content-length from the upstream response are stripped", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Encoding": "gzip",
+          "Content-Length": "9999",
+        },
+      })) as unknown as typeof fetch;
+
+    const response = await POST(gatewayRequest({ model: "m" }), {
+      supabase: fakeUsageSupabase({ costRows: [] }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
   });
 });
