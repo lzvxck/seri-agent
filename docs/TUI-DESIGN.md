@@ -49,7 +49,7 @@ Four surfaces from the current TUI, restyled against the pair above. Square corn
 the one deliberate departure from what Ink draws today (`borderStyle="round"`): a hairline box
 reads as structure, not a friendly rounded card. Each panel sets `borderStyle` inline on its own
 `Box`, so this is `borderStyle="single"` in place of `"round"` at every call site — `App.tsx`,
-`panels/ApprovalBox.tsx`, `panels/AuthPanel.tsx`, `panels/ConfigPanel.tsx`, `panels/InputBox.tsx`,
+`components.tsx`, `panels/AuthPanel.tsx`, `panels/ConfigPanel.tsx`, `panels/InputBox.tsx`,
 `panels/ModelPicker.tsx`, `panels/PermissionsPanel.tsx`, `panels/SetupPanel.tsx`, and
 `panels/WelcomeSplash.tsx` — not a `theme.ts` change.
 
