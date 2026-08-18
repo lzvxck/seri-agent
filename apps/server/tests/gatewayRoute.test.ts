@@ -236,6 +236,37 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
   });
 });
 
+describe("handlePost — a resolveEntitlement failure returns a structured error, not an unhandled exception", () => {
+  // getCustomerState re-throws anything that isn't a 404 (lib/polar.ts's own rule) — a Polar
+  // outage or a network failure reaching it, not a missing customer.
+  function fakePolarThatFailsOnLookup(): Polar {
+    const client = {
+      customers: {
+        getStateExternal: () => {
+          throw new Error("polar unreachable");
+        },
+      },
+    };
+    return client as unknown as Polar;
+  }
+
+  test("a thrown error from resolveEntitlement is caught: 503 entitlement_error, zero upstream calls, zero ledger writes", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking();
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarThatFailsOnLookup(),
+      getAccountForToken: identityStub(fakeIdentity()),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "entitlement_error" });
+    expect(upserts).toHaveLength(0);
+  });
+});
+
 describe("handlePost — the upstream Authorization header is never echoed back to the caller", () => {
   const originalKey = process.env.SERI_OPENROUTER_API_KEY;
 

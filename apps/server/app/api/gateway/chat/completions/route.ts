@@ -1,5 +1,6 @@
 import type { Polar } from "@polar-sh/sdk";
 import { findCatalogEntry } from "@seri/model-catalog";
+import type { Plan } from "@seri/plans";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   type AccountForToken,
@@ -63,7 +64,17 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   }
   const stream = body.stream === true;
 
-  const plan = await resolveEntitlement({ supabase, polar, products: process.env }, identity);
+  // resolveEntitlement reaches Polar and Supabase (getCustomerState, claimProvisioning,
+  // subscriptions.create) on a first-time or lapsed account, any of which can throw — an
+  // unhandled rejection here would 500 with no body rather than the structured response every
+  // other failure path in this function returns.
+  let plan: Plan | null;
+  try {
+    plan = await resolveEntitlement({ supabase, polar, products: process.env }, identity);
+  } catch (error) {
+    console.error("resolveEntitlement failed:", error);
+    return Response.json({ code: "entitlement_error" }, { status: 503 });
+  }
   if (!plan) {
     return Response.json({ code: "unknown_plan" }, { status: 402 });
   }
