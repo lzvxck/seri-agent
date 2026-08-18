@@ -253,11 +253,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   }
   const stream = body.stream === true;
 
-  const entitlement = await resolveEntitlement(
-    { supabase, polar, products: process.env },
-    identity,
-  );
-  const plan = entitlement.plan;
+  const plan = await resolveEntitlement({ supabase, polar, products: process.env }, identity);
   if (!plan) {
     return Response.json({ code: "unknown_plan" }, { status: 402 });
   }

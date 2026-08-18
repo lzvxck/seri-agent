@@ -92,8 +92,6 @@ async function createFreeSubscription(
   await completeProvisioning(deps.supabase, identity.userId);
 }
 
-export type EntitlementResult = { plan: Plan | null; provisioned: boolean };
-
 /**
  * Resolves the plan a request should be judged against, auto-provisioning a Free subscription
  * when the account holds no active subscription at all.
@@ -107,24 +105,21 @@ export type EntitlementResult = { plan: Plan | null; provisioned: boolean };
 export async function resolveEntitlement(
   deps: EntitlementDeps,
   identity: AccountForToken,
-): Promise<EntitlementResult> {
+): Promise<Plan | null> {
   const stored = storedPlan(identity);
-  if (stored) return { plan: stored, provisioned: false };
+  if (stored) return stored;
 
   const state = await getCustomerState(deps.polar, identity.userId);
   const subscriptions = state?.activeSubscriptions ?? [];
 
   const paid = paidSubscription(subscriptions, deps.products);
-  if (paid) return { plan: paid.plan, provisioned: false };
+  if (paid) return paid.plan;
 
   // Active, but not something we can fully account for. Stacking Free on top of a product we
   // cannot identify risks charging twice — same predicate apps/portal/lib/provisioning.ts
   // refuses to provision over.
   if (subscriptions.length > 0) {
-    return {
-      plan: holdsOnlyFree(subscriptions, deps.products) ? "free" : null,
-      provisioned: false,
-    };
+    return holdsOnlyFree(subscriptions, deps.products) ? "free" : null;
   }
 
   const freeProductId = productIdForPlan("free", deps.products);
@@ -135,11 +130,11 @@ export async function resolveEntitlement(
   if (!(await claimProvisioning(deps.supabase, identity.userId))) {
     // Another caller holds the claim and is creating the subscription right now. Report Free
     // without creating anything — the winner's subscription is moments away.
-    return { plan: "free", provisioned: false };
+    return "free";
   }
 
   await createFreeSubscription(deps, identity, freeProductId, state);
-  return { plan: "free", provisioned: true };
+  return "free";
 }
 
 export function startOfUtcDay(now: Date = new Date()): Date {

@@ -153,7 +153,7 @@ describe("resolveEntitlement", () => {
       status: "canceled",
     });
 
-    expect(result.plan).not.toBe("pro");
+    expect(result).not.toBe("pro");
     expect(calls.some((c) => c.method === "customers.getStateExternal")).toBe(true);
   });
 
@@ -167,7 +167,7 @@ describe("resolveEntitlement", () => {
       status: "active",
     });
 
-    expect(result).toEqual({ plan: "max", provisioned: false });
+    expect(result).toBe("max");
     expect(calls).toEqual([]);
   });
 
@@ -179,7 +179,7 @@ describe("resolveEntitlement", () => {
 
     const result = await resolveEntitlement(deps(supabase, polar), IDENTITY);
 
-    expect(result).toEqual({ plan: "ultra", provisioned: false });
+    expect(result).toBe("ultra");
   });
 
   // The non-optional edge case: no active subscription at all auto-provisions Free, in this
@@ -190,7 +190,7 @@ describe("resolveEntitlement", () => {
 
     const result = await resolveEntitlement(deps(supabase, polar), IDENTITY);
 
-    expect(result).toEqual({ plan: "free", provisioned: true });
+    expect(result).toBe("free");
     expect(calls.map((c) => c.method)).toEqual([
       "customers.getStateExternal",
       "customers.create",
@@ -210,7 +210,7 @@ describe("resolveEntitlement", () => {
 
     const result = await resolveEntitlement(deps(supabase, polar), IDENTITY);
 
-    expect(result).toEqual({ plan: "free", provisioned: true });
+    expect(result).toBe("free");
     expect(calls.map((c) => c.method)).toEqual([
       "customers.getStateExternal",
       "subscriptions.create",
@@ -218,15 +218,14 @@ describe("resolveEntitlement", () => {
   });
 
   // The negative control for the case above: a route that simply refuses instead of
-  // provisioning would report a null/false result here rather than "free"/provisioned: true.
+  // provisioning would report null here rather than "free".
   test("negative control: the auto-provision result is not what a refusing route would return", async () => {
     const { client: supabase } = fakeSupabase();
     const { client: polar } = fakePolar([null]);
 
     const result = await resolveEntitlement(deps(supabase, polar), IDENTITY);
 
-    expect(result.plan).not.toBeNull();
-    expect(result.provisioned).not.toBe(false);
+    expect(result).not.toBeNull();
   });
 
   test("no active subscription and the claim is lost: reports free and creates nothing", async () => {
@@ -241,7 +240,7 @@ describe("resolveEntitlement", () => {
 
     const result = await resolveEntitlement(deps(supabase, polar), IDENTITY);
 
-    expect(result).toEqual({ plan: "free", provisioned: false });
+    expect(result).toBe("free");
     expect(calls.filter((c) => c.method === "subscriptions.create")).toHaveLength(0);
   });
 
@@ -263,7 +262,7 @@ describe("resolveEntitlement", () => {
 
     const result = await resolveEntitlement(deps(supabase, polar), IDENTITY);
 
-    expect(result).toEqual({ plan: null, provisioned: false });
+    expect(result).toBeNull();
     expect(calls.map((c) => c.method)).toEqual(["customers.getStateExternal"]);
   });
 });
