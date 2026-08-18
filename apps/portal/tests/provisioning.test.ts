@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
+import { POLAR_CALL_TIMEOUT_MS, STALE_CLAIM_MS } from "@seri/provisioning";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ensureProvisioned } from "../lib/provisioning";
 import type { ActiveSubscription } from "../lib/subscriptions";
@@ -13,7 +14,7 @@ const PRODUCTS = {
 
 const USER = { userId: "user_01H", email: "someone@seriora.ai" };
 
-type ClaimRow = { workos_user_id: string; state: string; claimed_at: string };
+type ClaimRow = { workos_user_id: string; state: string; claimed_at: string; claim_token: string };
 type Filter = { column: keyof ClaimRow; op: "eq" | "lt"; value: string };
 
 function matches(row: ClaimRow, filters: Filter[]): boolean {
@@ -68,7 +69,10 @@ function fakeSupabase(
         };
       }
       return {
-        upsert: (values: { workos_user_id: string }, options: { ignoreDuplicates?: boolean }) => ({
+        upsert: (
+          values: { workos_user_id: string; claim_token: string },
+          options: { ignoreDuplicates?: boolean },
+        ) => ({
           select: () => {
             // A plain upsert would overwrite the winner's claim instead of reporting the
             // conflict, so the fake refuses to model anything but ON CONFLICT DO NOTHING.
@@ -80,6 +84,7 @@ function fakeSupabase(
               workos_user_id: id,
               state: "pending",
               claimed_at: new Date().toISOString(),
+              claim_token: values.claim_token,
             });
             return Promise.resolve({ data: [{ workos_user_id: id }], error: null });
           },
@@ -613,6 +618,7 @@ describe("ensureProvisioned under concurrent renders", () => {
 
   function fanOutPolar(activeSubscriptions: ActiveSubscription[] = []) {
     let creates = 0;
+    const createOptions: unknown[] = [];
     const client = {
       customers: {
         getStateExternal: () => Promise.resolve({ activeSubscriptions }),
@@ -622,13 +628,14 @@ describe("ensureProvisioned under concurrent renders", () => {
         // Nothing scheduled: these tests are about how many subscriptions get created, not
         // about what is booked against them.
         get: (args: { id: string }) => Promise.resolve({ id: args.id, pendingUpdate: null }),
-        create: () => {
+        create: (_args: unknown, options?: unknown) => {
           creates += 1;
+          createOptions.push(options);
           return Promise.resolve({ id: `sub_${creates}` });
         },
       },
     };
-    return { client: client as unknown as Polar, creates: () => creates };
+    return { client: client as unknown as Polar, creates: () => creates, createOptions };
   }
 
   test(`creates exactly one free subscription across ${RENDERS} concurrent renders`, async () => {
@@ -646,13 +653,34 @@ describe("ensureProvisioned under concurrent renders", () => {
     expect(results.every((r) => r.plan === "free")).toBe(true);
   });
 
+  // The fix for a CodeRabbit finding on the extracted @seri/provisioning package:
+  // @polar-sh/sdk has no default request timeout, so an unbounded subscriptions.create call held
+  // under this user's claim could still be in flight after reclaimStale hands the claim to a
+  // second render — both would then create a subscription.
+  test("subscriptions.create carries a timeout bounded well under STALE_CLAIM_MS", async () => {
+    const { client: supabase } = fakeSupabase(null);
+    const { client: polar, createOptions } = fanOutPolar();
+
+    await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER);
+
+    expect((createOptions[0] as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(
+      POLAR_CALL_TIMEOUT_MS,
+    );
+    expect(POLAR_CALL_TIMEOUT_MS).toBeLessThan(STALE_CLAIM_MS / 2);
+  });
+
   // The losers' half of the same guarantee, isolated: a claim already held by someone else
   // means create nothing and report Free.
   test("a render that loses the claim creates nothing and still reports free", async () => {
     const held = new Map([
       [
         "user_01H",
-        { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() },
+        {
+          workos_user_id: "user_01H",
+          state: "pending",
+          claimed_at: new Date().toISOString(),
+          claim_token: "other-caller-token",
+        },
       ],
     ]);
     const { client: supabase } = fakeSupabase(null, held);
@@ -673,7 +701,12 @@ describe("ensureProvisioned under concurrent renders", () => {
     const held = new Map([
       [
         "user_01H",
-        { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() },
+        {
+          workos_user_id: "user_01H",
+          state: "pending",
+          claimed_at: new Date().toISOString(),
+          claim_token: "other-caller-token",
+        },
       ],
     ]);
     const { client: supabase } = fakeSupabase(null, held);
@@ -697,6 +730,7 @@ describe("ensureProvisioned under concurrent renders", () => {
           workos_user_id: "user_01H",
           state: "pending",
           claimed_at: new Date(Date.now() - 120_000).toISOString(),
+          claim_token: "stale-caller-token",
         },
       ],
     ]);
@@ -719,6 +753,7 @@ describe("ensureProvisioned under concurrent renders", () => {
           workos_user_id: "user_01H",
           state: "pending",
           claimed_at: new Date(Date.now() - 120_000).toISOString(),
+          claim_token: "stale-caller-token",
         },
       ],
     ]);

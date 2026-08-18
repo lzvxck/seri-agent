@@ -23,8 +23,10 @@ const RETRY_DELAYS_MS = [200, 500];
  * account_status; adding a second writer here is the obvious-looking change that produces
  * two writers with schemas that drift apart the first time either one is extended.
  *
- * The portal does write to Supabase — but only to `provisioning_claims`, which it owns
- * outright. That is not a precedent for writing here: this table stays single-writer.
+ * The portal does write to Supabase — but only to `provisioning_claims`, which it co-owns with
+ * the gateway route in apps/server (both run the same "create this WorkOS user's Free
+ * subscription" operation, and a barrier only bars if every writer of that operation shares it).
+ * That is not a precedent for writing here: this table stays single-writer.
  *
  * Both columns are text in the database, so both are parsed against the shared unions the
  * webhook writes from. A value outside them — an unmapped product, a status from a schema

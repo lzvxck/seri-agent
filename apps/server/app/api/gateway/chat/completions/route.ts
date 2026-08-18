@@ -1,0 +1,237 @@
+import type { Polar } from "@polar-sh/sdk";
+import { findCatalogEntry } from "@seri/model-catalog";
+import type { Plan } from "@seri/plans";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { after as afterReal } from "next/server";
+import {
+  type AccountForToken,
+  getAccountForToken as getAccountForTokenReal,
+} from "../../../../../lib/accountStatus";
+import { getModelCatalog } from "../../../../../lib/catalog";
+import {
+  countRequestsToday,
+  resolveEntitlement,
+  sumSpendThisMonth,
+} from "../../../../../lib/entitlement";
+import { getPolarClient } from "../../../../../lib/polar";
+import { decidePreflight, provisionalRow, usageUpdate } from "../../../../../lib/quota";
+import { createUsageTap, forwardableHeaders } from "../../../../../lib/streamUsage";
+import { getSupabaseClient } from "../../../../../lib/supabase";
+import { insertUsageEvent, updateUsageEvent } from "../../../../../lib/usageLedger";
+
+// Optional injected dependencies, defaulting to the real singletons — the same
+// override-with-a-default seam every provider/*.ts file already uses. Tests call handlePost
+// directly to exercise the route's own control flow (e.g. "every refusal path calls fetch zero
+// times") without a real Supabase/Polar/network round trip.
+export type RouteDeps = {
+  supabase?: SupabaseClient;
+  polar?: Polar;
+  getAccountForToken?: (supabase: SupabaseClient, token: string) => Promise<AccountForToken | null>;
+  fetchFn?: typeof fetch;
+  // next/server's after() requires an actual Next.js request scope (workAsyncStorage), which
+  // only exists when Next's own router invokes POST below — calling handlePost directly, the
+  // way every test in this file does, throws "called outside a request scope". Overridable for
+  // exactly that reason, the same seam every other real dependency here already has.
+  after?: typeof afterReal;
+};
+
+// Next.js's build-time route-handler validator checks POST's declared signature against its
+// own expected `(request, context)` shape, not just how it's called at runtime — a second
+// parameter that doesn't match that shape fails `next build` even though nothing in this repo
+// ever passes one. handlePost carries the real logic and the deps seam; the exported POST is
+// the one-argument shape Next.js requires, matching apps/server/app/api/webhooks/polar/route.ts's
+// own split between its exported pure functions and its framework-facing POST.
+export async function handlePost(request: Request, deps: RouteDeps = {}): Promise<Response> {
+  const supabase = deps.supabase ?? getSupabaseClient();
+  const polar = deps.polar ?? getPolarClient();
+  const getAccountForToken = deps.getAccountForToken ?? getAccountForTokenReal;
+  const fetchFn = deps.fetchFn ?? fetch;
+  const after = deps.after ?? afterReal;
+
+  const auth = request.headers.get("Authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined;
+  if (!token) {
+    return Response.json({ code: "unauthenticated" }, { status: 401 });
+  }
+
+  // readAccountStatus (inside getAccountForToken) throws on a Supabase error that isn't a
+  // retryable clock-skew response, or once its retry budget is exhausted — an unhandled
+  // rejection here would 500 with no body, unlike every other failure path in this function.
+  let identity: AccountForToken | null;
+  try {
+    identity = await getAccountForToken(supabase, token);
+  } catch (error) {
+    console.error("getAccountForToken failed:", error);
+    return Response.json({ code: "identity_lookup_error" }, { status: 503 });
+  }
+  if (!identity) {
+    return Response.json({ code: "token_invalid" }, { status: 401 });
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ code: "invalid_body" }, { status: 400 });
+  }
+  const modelId = typeof body.model === "string" ? body.model : undefined;
+  if (!modelId) {
+    return Response.json({ code: "missing_model" }, { status: 400 });
+  }
+  const stream = body.stream === true;
+
+  // resolveEntitlement reaches Polar and Supabase (getCustomerState, claimProvisioning,
+  // subscriptions.create) on a first-time or lapsed account, any of which can throw — an
+  // unhandled rejection here would 500 with no body rather than the structured response every
+  // other failure path in this function returns.
+  let plan: Plan | null;
+  try {
+    plan = await resolveEntitlement({ supabase, polar, products: process.env }, identity);
+  } catch (error) {
+    console.error("resolveEntitlement failed:", error);
+    return Response.json({ code: "entitlement_error" }, { status: 503 });
+  }
+  if (!plan) {
+    return Response.json({ code: "unknown_plan" }, { status: 402 });
+  }
+
+  const catalog = await getModelCatalog();
+  const entry = findCatalogEntry(catalog, modelId, "openrouter");
+  // Read-then-insert, not atomic: N concurrent requests from one account can all read the same
+  // countRequestsToday/sumSpendThisMonth result and all pass preflight before any of their own
+  // provisional rows (below) commit, allowing a bounded over-quota burst — the count/spend
+  // catches up on the NEXT request, since every attempt still gets recorded, so this is not
+  // unlimited usage, only unbounded-until-caught-up. A real fix would make the count-and-insert
+  // one atomic DB operation (a Postgres RPC); out of scope while burst size stays small enough
+  // not to matter in practice.
+  let requestsToday: number;
+  let spendUsd: number;
+  try {
+    [requestsToday, spendUsd] = await Promise.all([
+      countRequestsToday(supabase, identity.userId),
+      plan === "free" ? Promise.resolve(0) : sumSpendThisMonth(supabase, identity.userId),
+    ]);
+  } catch (error) {
+    console.error("usage query failed:", error);
+    return Response.json({ code: "usage_query_error" }, { status: 503 });
+  }
+  const preflight = decidePreflight({ plan, modelId, catalog, requestsToday, spendUsd });
+  if (!preflight.allow) {
+    return Response.json({ code: preflight.code }, { status: preflight.status });
+  }
+
+  const sessionId = request.headers.get("X-Seri-Session-Id") ?? "";
+  // Minted here, unconditionally — never trusted from the caller. A client sending the same
+  // X-Seri-Idempotency-Key on every request would otherwise collapse every usage_events row
+  // into one via the ledger's ON CONFLICT DO NOTHING, so countRequestsToday and
+  // sumSpendThisMonth would never advance past the first request — defeating both the Free
+  // daily-count cap and the paid spend cap entirely. The CLI may still send that header for its
+  // own tracing; nothing here reads it.
+  const idempotencyKey = crypto.randomUUID();
+  // models/route/provider are OpenRouter's own routing-override fields, independent of `model`
+  // — the only field preflight/decidePreflight actually checks against the catalog. Forwarded
+  // unstripped, a Free-tier request could pass preflight on a zero-price `model` and add a
+  // priced `models` fallback (or `provider`/`route` overrides) that OpenRouter honors instead,
+  // spending Seri's key on a model preflight never approved.
+  const { models: _models, route: _route, provider: _provider, ...sanitizedBody } = body;
+  const forwardBody: Record<string, unknown> = { ...sanitizedBody, session_id: sessionId };
+  if (stream) forwardBody.stream_options = { include_usage: true };
+
+  // Written before the upstream call, with zero usage/cost, so an aborted or disconnected
+  // request still counts as one attempt against the Free daily-count cap — a client that
+  // cancels mid-stream skips the TransformStream's flush() below entirely, and without this
+  // row nothing would ever record that attempt happened. The completion paths below only ever
+  // UPDATE this same row (keyed on idempotencyKey), never insert a second one. An aborted paid
+  // request keeps this row's provisional (zero) cost — full mid-stream cost tracking would need
+  // parsing token deltas as they arrive, which this does not do; only the Free-tier request
+  // count is guaranteed accurate on abort, not a paid request's exact spend.
+  // insertUsageEvent's row is the only record that this attempt happened at all — if it fails
+  // to write, countRequestsToday/sumSpendThisMonth never learn about this request, so both the
+  // Free daily cap and the paid spend cap would stop enforcing while requests keep spending
+  // Seri's OpenRouter key. Refuse rather than forward when it does.
+  const recorded = await insertUsageEvent(
+    supabase,
+    provisionalRow({ idempotencyKey, userId: identity.userId, modelId }),
+  );
+  if (!recorded) {
+    return Response.json({ code: "usage_ledger_unavailable" }, { status: 503 });
+  }
+
+  // Unlike every other fallible step above, an unreachable/timed-out OpenRouter or a client
+  // disconnect (this request's own AbortSignal firing) rejects this call directly — an unhandled
+  // rejection here would 500 with no body rather than the structured response every other
+  // failure path in this function returns. The provisional row above already recorded the
+  // attempt either way.
+  let upstream: Response;
+  try {
+    upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.SERI_OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(forwardBody),
+      signal: request.signal,
+    });
+  } catch (error) {
+    console.error("upstream fetch failed:", error);
+    return Response.json({ code: "upstream_unreachable" }, { status: 503 });
+  }
+
+  // A non-OK upstream response is returned to the caller as-is. The provisional row above
+  // already recorded the attempt; nothing further is written here.
+  if (!upstream.ok || !upstream.body) {
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: forwardableHeaders(upstream.headers),
+    });
+  }
+
+  const requestId = upstream.headers.get("x-request-id");
+
+  if (stream) {
+    const usageTap = createUsageTap((usage) => {
+      // Scheduled via after(), not just `void`d: this deploys as a Vercel serverless function
+      // (apps/server/vercel.json), which can freeze/tear down the invocation as soon as the
+      // response body is fully flushed to the caller — a bare `void` update racing that teardown
+      // could be killed mid-write, permanently leaving this row at its provisional cost_usd: 0
+      // and silently undercounting a paid user's spend. after() keeps the invocation alive until
+      // this callback settles. A ledger write failure inside it must still not be able to affect
+      // the response, which has already streamed by the time flush() runs — updateUsageEvent
+      // itself never throws, only logs.
+      after(() => updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId)));
+    });
+    return new Response(upstream.body.pipeThrough(usageTap), {
+      status: upstream.status,
+      headers: forwardableHeaders(upstream.headers),
+    });
+  }
+
+  // Read as text first: an OK upstream response with a non-JSON body would otherwise reject
+  // upstream.json() directly, 500ing with no body instead of the passthrough below. The
+  // provisional row's cost stays at zero either way here — there is no usage payload to update
+  // it with when the body isn't JSON — but the caller now gets OpenRouter's real body/status
+  // instead of an opaque crash.
+  const text = await upstream.text();
+  let json: { usage?: unknown };
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return new Response(text, {
+      status: upstream.status,
+      headers: forwardableHeaders(upstream.headers),
+    });
+  }
+  // Scheduled via after(), same as the streaming path above and for the same reason: awaiting it
+  // here would delay the response for no benefit, but a bare `void` risks the Vercel invocation
+  // being torn down before this write lands.
+  after(() =>
+    updateUsageEvent(supabase, idempotencyKey, usageUpdate(json.usage, entry, requestId)),
+  );
+  return Response.json(json, {
+    status: upstream.status,
+    headers: forwardableHeaders(upstream.headers),
+  });
+}
+
+export const POST = (request: Request): Promise<Response> => handlePost(request);

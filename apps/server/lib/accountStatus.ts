@@ -1,5 +1,13 @@
-import { PAID_PLANS, type Plan, type SubscriptionStatus, isPaidPlan } from "@seri/plans";
+import {
+  isPaidPlan,
+  PAID_PLANS,
+  type Plan,
+  type SubscriptionStatus,
+  toPlan,
+  toSubscriptionStatus,
+} from "@seri/plans";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { verifyAccessToken } from "./workosToken";
 
 /*
  * Both unions come from @seri/plans, the same module the portal parses this table back
@@ -122,4 +130,81 @@ export async function upsertAccountStatus(
     .eq("workos_user_id", params.workosUserId)
     .or(NOT_ACTIVE_PAID);
   if (error) throw error;
+}
+
+/*
+ * The read side of this table, added for the gateway route: it needs a caller's plan before it
+ * can enforce anything, and the Polar webhook above stays this file's only WRITER — this only
+ * adds a reader.
+ *
+ * PGRST303 ("JWT issued at future") is Supabase rejecting our own service-role request because
+ * its clock is momentarily ahead of the one that minted the token — the same skew
+ * apps/portal/lib/accountStatus.ts measured and retries around. A gateway request gets one shot
+ * at this before failing a chargeable inference call, so the same bounded retry applies here.
+ */
+const RETRY_DELAYS_MS = [200, 500];
+
+export type AccountStatus = {
+  plan: Plan | null;
+  status: SubscriptionStatus | null;
+  email: string | null;
+};
+
+export async function readAccountStatus(
+  supabase: SupabaseClient,
+  workosUserId: string,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<AccountStatus | null> {
+  for (let attempt = 0; ; attempt++) {
+    const { data, error } = await supabase
+      .from("account_status")
+      .select("plan, subscription_status, email")
+      .eq("workos_user_id", workosUserId)
+      .maybeSingle();
+    // PGRST303 is a PostgREST error *response*, surfaced by postgrest-js as a plain
+    // {message, details, hint, code} object on `error` rather than as an Error — so the code is
+    // read off the shape, never off an instanceof. A genuine network failure carries no
+    // PostgREST code at all and falls straight through to the throw, which is correct.
+    if (error) {
+      if ((error as { code?: unknown })?.code !== "PGRST303" || attempt >= RETRY_DELAYS_MS.length)
+        throw error;
+      await wait(RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+    if (!data) return null;
+    return {
+      plan: toPlan(data.plan),
+      status: toSubscriptionStatus(data.subscription_status),
+      email: data.email,
+    };
+  }
+}
+
+export type AccountForToken = {
+  userId: string;
+  email: string | null;
+  plan: Plan | null;
+  status: SubscriptionStatus | null;
+};
+
+// A verified user with no account_status row yet is the ordinary state for someone who just
+// logged in and has never been provisioned — not an error, and not this function's job to fix
+// (entitlement.ts's resolveEntitlement is what auto-provisions Free).
+//
+// `verify` defaults to the real verifyAccessToken but can be overridden, so a test can exercise
+// this without ever reaching WorkOS's real JWKS endpoint.
+export async function getAccountForToken(
+  supabase: SupabaseClient,
+  token: string,
+  verify: typeof verifyAccessToken = verifyAccessToken,
+): Promise<AccountForToken | null> {
+  const identity = await verify(token);
+  if (!identity) return null;
+  const row = await readAccountStatus(supabase, identity.userId);
+  return {
+    userId: identity.userId,
+    email: row?.email ?? identity.email ?? null,
+    plan: row?.plan ?? null,
+    status: row?.status ?? null,
+  };
 }

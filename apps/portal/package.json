@@ -14,6 +14,7 @@
     "@polar-sh/nextjs": "^0.9.6",
     "@polar-sh/sdk": "^0.47.1",
     "@seri/plans": "workspace:*",
+    "@seri/provisioning": "workspace:*",
     "@seri/ui": "workspace:*",
     "@supabase/supabase-js": "^2.111.0",
     "@tailwindcss/postcss": "^4",
