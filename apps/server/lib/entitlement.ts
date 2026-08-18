@@ -131,6 +131,42 @@ async function createFreeSubscription(
 }
 
 /**
+ * Read-only entitlement lookup for a caller that must never provision anything as a side effect
+ * (apps/server/app/api/gateway/account-status/route.ts's own GET contract, CodeRabbit finding
+ * PR #123: a read-only route was calling resolveEntitlement directly, so it could create a real
+ * Polar Free subscription as a side effect of a request that only exists to render UI) — the
+ * stored plan if account_status already has one, otherwise a LIVE Polar read for an existing
+ * subscription (paid or free). Returns null both for a brand-new, never-provisioned account and
+ * for a subscription this deployment cannot identify — either way, nothing is created; a caller
+ * that needs the auto-provisioning behavior for a real chargeable request must use
+ * resolveEntitlement instead.
+ *
+ * Deliberately its own `getCustomerState` call rather than sharing resolveEntitlement's — the two
+ * routes that call these never call both for the same request, so there is no double read to
+ * dedupe, and threading a shared read through would put a provisioning-only concern (the raw
+ * CustomerState createFreeSubscription needs) into this function's own contract for no benefit.
+ */
+export async function readEntitlement(
+  deps: Pick<EntitlementDeps, "polar" | "products">,
+  identity: AccountForToken,
+): Promise<Plan | null> {
+  const stored = storedPlan(identity);
+  if (stored) return stored;
+
+  const state = await getCustomerState(deps.polar, identity.userId);
+  const subscriptions = state?.activeSubscriptions ?? [];
+
+  const paid = paidSubscription(subscriptions, deps.products);
+  if (paid) return paid.plan;
+
+  if (subscriptions.length > 0) {
+    return holdsOnlyFree(subscriptions, deps.products) ? "free" : null;
+  }
+
+  return null;
+}
+
+/**
  * Resolves the plan a request should be judged against, auto-provisioning a Free subscription
  * when the account holds no active subscription at all.
  *

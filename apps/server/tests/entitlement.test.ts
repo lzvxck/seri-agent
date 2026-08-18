@@ -6,6 +6,7 @@ import type { AccountForToken } from "../lib/accountStatus";
 import {
   countRequestsToday,
   type EntitlementDeps,
+  readEntitlement,
   resolveEntitlement,
   startOfUtcDay,
   startOfUtcMonth,
@@ -365,6 +366,61 @@ describe("resolveEntitlement", () => {
 
     expect(result).toBeNull();
     expect(calls.map((c) => c.method)).toEqual(["customers.getStateExternal"]);
+  });
+});
+
+// CodeRabbit finding, PR #123: apps/server/app/api/gateway/account-status/route.ts's GET used to
+// call resolveEntitlement directly, so a genuinely unprovisioned account made it auto-provision a
+// real Polar Free subscription as a side effect of a read-only request. readEntitlement is the
+// non-provisioning alternative — these tests are the library-level proof, complementing
+// gatewayAccountStatusRoute.test.ts's own route-level ones.
+describe("readEntitlement", () => {
+  test("an active stored plan is the fast path — Polar is never called", async () => {
+    const { client: polar, calls } = fakePolar([]);
+
+    const result = await readEntitlement(
+      { polar, products: PRODUCTS },
+      { ...IDENTITY, plan: "max", status: "active" },
+    );
+
+    expect(result).toBe("max");
+    expect(calls).toEqual([]);
+  });
+
+  test("no stored plan, an existing paid Polar subscription: returns that plan, provisions nothing", async () => {
+    const { client: polar, calls } = fakePolar([
+      { activeSubscriptions: [{ id: "sub_1", productId: PRODUCTS.POLAR_PRODUCT_PRO }] },
+    ]);
+
+    const result = await readEntitlement({ polar, products: PRODUCTS }, IDENTITY);
+
+    expect(result).toBe("pro");
+    expect(calls.map((c) => c.method)).toEqual(["customers.getStateExternal"]);
+  });
+
+  test("an account holding a product this deployment cannot name: null, provisions nothing", async () => {
+    const { client: polar, calls } = fakePolar([
+      { activeSubscriptions: [{ id: "sub_x", productId: "prod_from_another_environment" }] },
+    ]);
+
+    const result = await readEntitlement({ polar, products: PRODUCTS }, IDENTITY);
+
+    expect(result).toBeNull();
+    expect(calls.map((c) => c.method)).toEqual(["customers.getStateExternal"]);
+  });
+
+  // The regression itself: resolveEntitlement's own equivalent case (a 404/no-customer Polar
+  // response) is exactly the branch that goes on to claim provisioning and create a Free
+  // subscription — readEntitlement must stop right after the read and never reach for either.
+  test("a genuinely unprovisioned account (no Polar customer, no subscriptions): null, and creates nothing", async () => {
+    const { client: polar, calls } = fakePolar([null]);
+
+    const result = await readEntitlement({ polar, products: PRODUCTS }, IDENTITY);
+
+    expect(result).toBeNull();
+    expect(calls.map((c) => c.method)).toEqual(["customers.getStateExternal"]);
+    expect(calls.some((c) => c.method === "customers.create")).toBe(false);
+    expect(calls.some((c) => c.method === "subscriptions.create")).toBe(false);
   });
 });
 

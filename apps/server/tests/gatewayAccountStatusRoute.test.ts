@@ -6,8 +6,9 @@ import type { AccountForToken } from "../lib/accountStatus";
 
 /*
  * handleGet-level tests, injecting every dependency the route resolves via RouteDeps — same
- * deps-injection pattern as gatewayRoute.test.ts, since this route reuses the same
- * getAccountForToken/resolveEntitlement pair chat/completions/route.ts does.
+ * deps-injection pattern as gatewayRoute.test.ts. Reuses getAccountForToken with
+ * chat/completions/route.ts, but readEntitlement (not resolveEntitlement) for the plan lookup —
+ * this route must never provision anything (see the dedicated describe block below).
  */
 
 function fakePolarWith(activeSubscriptions: { id: string; productId: string }[]) {
@@ -101,15 +102,51 @@ describe("handleGet — a resolveEntitlement failure returns a structured error,
 });
 
 describe("handleGet — a product this deployment cannot name", () => {
-  test("resolveEntitlement returning null: 402 unknown_plan", async () => {
+  test("an unrecognized active subscription: 200 { plan: null }, not an error", async () => {
     const response = await handleGet(accountStatusRequest(), {
       supabase: noopSupabase,
       polar: fakePolarWith([{ id: "sub_x", productId: "prod_unrecognized" }]),
       getAccountForToken: identityStub(fakeIdentity()),
     });
 
-    expect(response.status).toBe(402);
-    expect(await response.json()).toEqual({ code: "unknown_plan" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ plan: null });
+  });
+});
+
+// CodeRabbit finding, PR #123: this GET used to call resolveEntitlement directly, which
+// auto-provisions a real Polar Free subscription for an account with no active subscription —
+// a read-only route creating persistent billing state as a side effect of rendering UI.
+describe("handleGet — a genuinely unprovisioned account never gets provisioned by this GET", () => {
+  // Throws on any call a provisioning path would make — proves handleGet's own dependency chain
+  // (readEntitlement) structurally never reaches them, not just that this particular fixture
+  // happens not to trigger them.
+  function fakePolarThatMustNeverProvision(): Polar {
+    const client = {
+      customers: {
+        getStateExternal: () => Promise.resolve({ activeSubscriptions: [] }),
+        create: () => {
+          throw new Error("must never be called: this GET must never provision a customer");
+        },
+      },
+      subscriptions: {
+        create: () => {
+          throw new Error("must never be called: this GET must never create a subscription");
+        },
+      },
+    };
+    return client as unknown as Polar;
+  }
+
+  test("a brand-new account with no stored plan and no Polar subscription: 200 { plan: null }", async () => {
+    const response = await handleGet(accountStatusRequest(), {
+      supabase: noopSupabase,
+      polar: fakePolarThatMustNeverProvision(),
+      getAccountForToken: identityStub(fakeIdentity()),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ plan: null });
   });
 });
 

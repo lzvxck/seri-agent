@@ -5,7 +5,7 @@ import {
   type AccountForToken,
   getAccountForToken as getAccountForTokenReal,
 } from "../../../../lib/accountStatus";
-import { resolveEntitlement } from "../../../../lib/entitlement";
+import { readEntitlement } from "../../../../lib/entitlement";
 import { getPolarClient } from "../../../../lib/polar";
 import { getSupabaseClient } from "../../../../lib/supabase";
 
@@ -19,9 +19,15 @@ export type RouteDeps = {
   getAccountForToken?: (supabase: SupabaseClient, token: string) => Promise<AccountForToken | null>;
 };
 
-// Read-only: reuses resolveEntitlement/getAccountForToken exactly as chat/completions/route.ts
-// does, with no catalog lookup, no upstream fetch, and no usage_events write — this route never
-// charges anything, so a future change that adds forwarding here would need its own quota gate.
+// Read-only: reuses readEntitlement/getAccountForToken, with no catalog lookup, no upstream
+// fetch, and no usage_events write — this route never charges anything, so a future change that
+// adds forwarding here would need its own quota gate. readEntitlement specifically, not
+// resolveEntitlement (CodeRabbit finding, PR #123): resolveEntitlement auto-provisions a Free
+// Polar subscription for an unprovisioned account, which would make this GET create persistent
+// billing state as a side effect of a request that only exists to render UI. `plan: null` is a
+// normal, non-error 200 here — a brand-new account genuinely has no plan yet until its first real
+// gateway call provisions one; `fetchAccountPlan`'s own toPlan(null) already fails closed to "no
+// coverage" on the CLI side, so this needs no distinct error code of its own.
 export async function handleGet(request: Request, deps: RouteDeps = {}): Promise<Response> {
   const supabase = deps.supabase ?? getSupabaseClient();
   const polar = deps.polar ?? getPolarClient();
@@ -46,13 +52,10 @@ export async function handleGet(request: Request, deps: RouteDeps = {}): Promise
 
   let plan: Plan | null;
   try {
-    plan = await resolveEntitlement({ supabase, polar, products: process.env }, identity);
+    plan = await readEntitlement({ polar, products: process.env }, identity);
   } catch (error) {
-    console.error("resolveEntitlement failed:", error);
+    console.error("readEntitlement failed:", error);
     return Response.json({ code: "entitlement_error" }, { status: 503 });
-  }
-  if (!plan) {
-    return Response.json({ code: "unknown_plan" }, { status: 402 });
   }
 
   return Response.json({ plan }, { status: 200 });
