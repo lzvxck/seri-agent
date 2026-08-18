@@ -12,7 +12,7 @@ import {
   sumSpendThisMonth,
 } from "../../../../../lib/entitlement";
 import { getPolarClient } from "../../../../../lib/polar";
-import { decidePreflight, usageRowFrom } from "../../../../../lib/quota";
+import { decidePreflight, provisionalRow, usageUpdate } from "../../../../../lib/quota";
 import { createUsageTap, forwardableHeaders } from "../../../../../lib/streamUsage";
 import { getSupabaseClient } from "../../../../../lib/supabase";
 import { insertUsageEvent, updateUsageEvent } from "../../../../../lib/usageLedger";
@@ -107,14 +107,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // count is guaranteed accurate on abort, not a paid request's exact spend.
   await insertUsageEvent(
     supabase,
-    usageRowFrom({
-      idempotencyKey,
-      userId: identity.userId,
-      modelId,
-      usage: undefined,
-      entry,
-      requestId: null,
-    }),
+    provisionalRow({ idempotencyKey, userId: identity.userId, modelId }),
   );
 
   const upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
@@ -142,11 +135,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     const usageTap = createUsageTap((usage) => {
       // Not awaited: the response has already streamed to the caller by the time flush() runs,
       // so a ledger write failure must not be able to affect it either way.
-      void updateUsageEvent(
-        supabase,
-        idempotencyKey,
-        usageRowFrom({ idempotencyKey, userId: identity.userId, modelId, usage, entry, requestId }),
-      );
+      void updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId));
     });
     return new Response(upstream.body.pipeThrough(usageTap), {
       status: upstream.status,
@@ -158,18 +147,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // Not awaited, same as the streaming path above: updateUsageEvent already logs its own
   // failures rather than throwing, so awaiting it here would only delay the response for no
   // benefit.
-  void updateUsageEvent(
-    supabase,
-    idempotencyKey,
-    usageRowFrom({
-      idempotencyKey,
-      userId: identity.userId,
-      modelId,
-      usage: json.usage,
-      entry,
-      requestId,
-    }),
-  );
+  void updateUsageEvent(supabase, idempotencyKey, usageUpdate(json.usage, entry, requestId));
   return Response.json(json, {
     status: upstream.status,
     headers: forwardableHeaders(upstream.headers),

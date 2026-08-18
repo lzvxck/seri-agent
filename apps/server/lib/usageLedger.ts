@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { UsageEventRow } from "./quota";
 
 // Called once per request, awaited, for the provisional zero-usage row written before the
 // upstream call even starts — updateUsageEvent below is the separate, fire-and-forget write
@@ -8,7 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // keyed here on idempotency_key rather than workos_user_id.
 export async function insertUsageEvent(
   supabase: SupabaseClient,
-  row: Record<string, unknown>,
+  row: UsageEventRow,
 ): Promise<void> {
   try {
     const { error } = await supabase
@@ -28,7 +29,7 @@ export async function insertUsageEvent(
 export async function updateUsageEvent(
   supabase: SupabaseClient,
   idempotencyKey: string,
-  row: Record<string, unknown>,
+  row: Partial<UsageEventRow>,
 ): Promise<void> {
   try {
     const { error } = await supabase

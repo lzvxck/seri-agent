@@ -7,9 +7,10 @@ import {
   FREE_DAILY_REQUEST_CAP,
   isZeroPriceModel,
   PAID_DAILY_REQUEST_CAP,
+  provisionalRow,
   resolveFreeDailyCap,
   resolvePaidDailyCap,
-  usageRowFrom,
+  usageUpdate,
 } from "../lib/quota";
 
 function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
@@ -302,20 +303,12 @@ describe("costFromUsage", () => {
   });
 });
 
-describe("usageRowFrom", () => {
-  test("every column is present, with the fixed subscription/openrouter fields", () => {
-    const row = usageRowFrom({
+describe("provisionalRow", () => {
+  test("every column is present, with the fixed subscription/openrouter fields and zeroed usage", () => {
+    const row = provisionalRow({
       idempotencyKey: "idem-1",
       userId: "user_1",
       modelId: PRICED_ENTRY.id,
-      usage: {
-        cost: 0.01,
-        prompt_tokens: 100,
-        completion_tokens: 50,
-        prompt_tokens_details: { cached_tokens: 10 },
-      },
-      entry: PRICED_ENTRY,
-      requestId: "req-1",
     });
 
     expect(row).toEqual({
@@ -325,6 +318,29 @@ describe("usageRowFrom", () => {
       provider: "openrouter",
       upstream_route: "/api/v1/chat/completions",
       model_id: PRICED_ENTRY.id,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cost_usd: 0,
+      request_id: null,
+    });
+  });
+});
+
+describe("usageUpdate", () => {
+  test("only the usage-derived columns are present, none of provisionalRow's identity columns", () => {
+    const row = usageUpdate(
+      {
+        cost: 0.01,
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        prompt_tokens_details: { cached_tokens: 10 },
+      },
+      PRICED_ENTRY,
+      "req-1",
+    );
+
+    expect(row).toEqual({
       input_tokens: 100,
       output_tokens: 50,
       cache_read_tokens: 10,
@@ -334,14 +350,11 @@ describe("usageRowFrom", () => {
   });
 
   test("missing cache-read tokens write 0, not undefined", () => {
-    const row = usageRowFrom({
-      idempotencyKey: "idem-2",
-      userId: "user_1",
-      modelId: PRICED_ENTRY.id,
-      usage: { cost: 0.01, prompt_tokens: 100, completion_tokens: 50 },
-      entry: PRICED_ENTRY,
-      requestId: null,
-    });
+    const row = usageUpdate(
+      { cost: 0.01, prompt_tokens: 100, completion_tokens: 50 },
+      PRICED_ENTRY,
+      null,
+    );
 
     expect(row.cache_read_tokens).toBe(0);
   });

@@ -102,15 +102,32 @@ export function costFromUsage(usage: unknown, entry: ModelCatalogEntry | undefin
   return 0;
 }
 
-export function usageRowFrom(args: {
+// Mirrors the not-null columns of public.usage_events (supabase/migrations/20260806000002_usage_events.sql)
+// that this route ever writes; id/created_at are DB-generated and synced_to_billing_at is a
+// reconcile-queue column no consumer reads yet, so neither is part of this type.
+export type UsageEventRow = {
+  idempotency_key: string;
+  workos_user_id: string;
+  billing_mode: "subscription" | "byok";
+  provider: string;
+  upstream_route: string;
+  model_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+  request_id: string | null;
+};
+
+// Written before the upstream call starts, with zero usage/cost — the row an aborted request
+// still leaves behind. The immutable identity columns (idempotency_key, workos_user_id,
+// billing_mode, provider, upstream_route, model_id) live only here; usageUpdate below never
+// rewrites them.
+export function provisionalRow(args: {
   idempotencyKey: string;
   userId: string;
   modelId: string;
-  usage: unknown;
-  entry: ModelCatalogEntry | undefined;
-  requestId: string | null;
-}): Record<string, unknown> {
-  const raw = args.usage as RawUsage | null | undefined;
+}): UsageEventRow {
   return {
     idempotency_key: args.idempotencyKey,
     workos_user_id: args.userId,
@@ -119,12 +136,27 @@ export function usageRowFrom(args: {
     provider: "openrouter",
     upstream_route: "/api/v1/chat/completions",
     model_id: args.modelId,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cost_usd: 0,
+    request_id: null,
+  };
+}
+
+// Fills in provisionalRow's real usage/cost once the request completes — only the columns that
+// actually change, not a rewrite of the identity columns provisionalRow already wrote.
+export function usageUpdate(
+  usage: unknown,
+  entry: ModelCatalogEntry | undefined,
+  requestId: string | null,
+): Partial<UsageEventRow> {
+  const raw = usage as RawUsage | null | undefined;
+  return {
     input_tokens: raw?.prompt_tokens ?? 0,
     output_tokens: raw?.completion_tokens ?? 0,
     cache_read_tokens: raw?.prompt_tokens_details?.cached_tokens ?? 0,
-    cost_usd: costFromUsage(args.usage, args.entry),
-    request_id: args.requestId,
-    // synced_to_billing_at left unset: NULL is the reconcile queue the column exists for, and
-    // no consumer reads that queue yet — nothing writes it here.
+    cost_usd: costFromUsage(usage, entry),
+    request_id: requestId,
   };
 }

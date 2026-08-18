@@ -1,6 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { UsageEventRow } from "../lib/quota";
 import { insertUsageEvent, updateUsageEvent } from "../lib/usageLedger";
+
+function fakeRow(overrides: Partial<UsageEventRow> = {}): UsageEventRow {
+  return {
+    idempotency_key: "idem-1",
+    workos_user_id: "user_1",
+    billing_mode: "subscription",
+    provider: "openrouter",
+    upstream_route: "/api/v1/chat/completions",
+    model_id: "m",
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cost_usd: 0,
+    request_id: null,
+    ...overrides,
+  };
+}
 
 describe("insertUsageEvent", () => {
   function fakeSupabase(error: unknown = null) {
@@ -19,7 +37,7 @@ describe("insertUsageEvent", () => {
   test("issues exactly one upsert with onConflict/ignoreDuplicates on idempotency_key", async () => {
     const { client, calls } = fakeSupabase();
 
-    await insertUsageEvent(client, { idempotency_key: "idem-1" });
+    await insertUsageEvent(client, fakeRow());
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.opts).toEqual({ onConflict: "idempotency_key", ignoreDuplicates: true });
@@ -31,7 +49,7 @@ describe("insertUsageEvent", () => {
     const original = console.error;
     console.error = (...args: unknown[]) => void errors.push(args);
 
-    await expect(insertUsageEvent(client, { idempotency_key: "idem-1" })).resolves.toBeUndefined();
+    await expect(insertUsageEvent(client, fakeRow())).resolves.toBeUndefined();
 
     console.error = original;
     expect(errors).toHaveLength(1);
@@ -53,7 +71,7 @@ describe("insertUsageEvent", () => {
     console.error = (...args: unknown[]) => void errors.push(args);
 
     await expect(
-      insertUsageEvent(client as unknown as SupabaseClient, { idempotency_key: "idem-1" }),
+      insertUsageEvent(client as unknown as SupabaseClient, fakeRow()),
     ).resolves.toBeUndefined();
 
     console.error = original;
