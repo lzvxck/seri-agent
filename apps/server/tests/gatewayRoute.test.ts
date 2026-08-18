@@ -53,7 +53,12 @@ function gatewayRequest(body: unknown, headers: Record<string, string> = {}): Re
 // assert on idempotency_key values/call counts, and as a plain fake client where those calls
 // don't matter to the test.
 function fakeUsageSupabaseTracking(
-  opts: { count?: number; costRows?: { cost_usd: number }[] } = {},
+  opts: {
+    count?: number;
+    costRows?: { cost_usd: number }[];
+    quotaQueryError?: unknown;
+    upsertError?: unknown;
+  } = {},
 ) {
   const upserts: Record<string, unknown>[] = [];
   const updates: { row: Record<string, unknown>; idempotencyKey: string }[] = [];
@@ -63,14 +68,17 @@ function fakeUsageSupabaseTracking(
       return {
         select: (_columns: string, selectOpts?: { count?: string; head?: boolean }) => ({
           eq: () => ({
-            gte: () =>
-              selectOpts?.head
+            gte: () => {
+              if (opts.quotaQueryError) return Promise.reject(opts.quotaQueryError);
+              return selectOpts?.head
                 ? Promise.resolve({ count: opts.count ?? 0, data: null, error: null })
-                : Promise.resolve({ data: opts.costRows ?? [], error: null }),
+                : Promise.resolve({ data: opts.costRows ?? [], error: null });
+            },
           }),
         }),
         upsert: (row: Record<string, unknown>) => {
           upserts.push(row);
+          if (opts.upsertError) return Promise.resolve({ data: null, error: opts.upsertError });
           return Promise.resolve({ data: null, error: null });
         },
         update: (row: Record<string, unknown>) => ({
@@ -264,6 +272,100 @@ describe("handlePost — a resolveEntitlement failure returns a structured error
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ code: "entitlement_error" });
     expect(upserts).toHaveLength(0);
+  });
+});
+
+describe("handlePost — a quota-query failure returns a structured error, not an unhandled exception", () => {
+  test("countRequestsToday/sumSpendThisMonth rejecting is caught: 503 usage_query_error, zero upstream calls, zero ledger writes", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking({
+      quotaQueryError: new Error("supabase unreachable"),
+    });
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "usage_query_error" });
+    expect(upserts).toHaveLength(0);
+  });
+});
+
+describe("handlePost — a usage-ledger write failure refuses the request instead of forwarding on nothing to track it", () => {
+  test("insertUsageEvent failing: 503 usage_ledger_unavailable, zero upstream calls", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase } = fakeUsageSupabaseTracking({
+      upsertError: { message: "insert failed" },
+    });
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "usage_ledger_unavailable" });
+  });
+});
+
+describe("handlePost — OpenRouter routing overrides are stripped before forwarding", () => {
+  // A Free-tier request could otherwise pass preflight on a zero-price `model` and add a priced
+  // `models` fallback (or `provider`/`route` overrides) that OpenRouter honors instead, spending
+  // Seri's key on a model preflight never approved.
+  test("models/route/provider from the client body never reach the upstream fetch call", async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return completedNonStreamResponse();
+    }) as unknown as typeof fetch;
+
+    await handlePost(
+      gatewayRequest({
+        model: "m",
+        models: ["priced/model"],
+        route: "fallback",
+        provider: { order: ["priced-provider"] },
+      }),
+      {
+        supabase: fakeUsageSupabaseTracking({ costRows: [] }).client,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+        fetchFn,
+      },
+    );
+
+    expect(capturedBody?.model).toBe("m");
+    expect(capturedBody?.models).toBeUndefined();
+    expect(capturedBody?.route).toBeUndefined();
+    expect(capturedBody?.provider).toBeUndefined();
+  });
+});
+
+describe("handlePost — a non-JSON upstream body on the non-streaming path is passed through, not 500ed", () => {
+  test("an OK upstream response with a non-JSON body is forwarded as-is, and the ledger row is not updated", async () => {
+    const fetchFn = (async () =>
+      new Response("not json", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      })) as unknown as typeof fetch;
+    const { client: supabase, updates } = fakeUsageSupabaseTracking({ costRows: [] });
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("not json");
+    expect(updates).toHaveLength(0);
   });
 });
 

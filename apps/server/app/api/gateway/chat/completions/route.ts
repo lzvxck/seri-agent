@@ -88,10 +88,17 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // unlimited usage, only unbounded-until-caught-up. A real fix would make the count-and-insert
   // one atomic DB operation (a Postgres RPC); out of scope while burst size stays small enough
   // not to matter in practice.
-  const [requestsToday, spendUsd] = await Promise.all([
-    countRequestsToday(supabase, identity.userId),
-    plan === "free" ? Promise.resolve(0) : sumSpendThisMonth(supabase, identity.userId),
-  ]);
+  let requestsToday: number;
+  let spendUsd: number;
+  try {
+    [requestsToday, spendUsd] = await Promise.all([
+      countRequestsToday(supabase, identity.userId),
+      plan === "free" ? Promise.resolve(0) : sumSpendThisMonth(supabase, identity.userId),
+    ]);
+  } catch (error) {
+    console.error("usage query failed:", error);
+    return Response.json({ code: "usage_query_error" }, { status: 503 });
+  }
   const preflight = decidePreflight({ plan, modelId, catalog, requestsToday, spendUsd });
   if (!preflight.allow) {
     return Response.json({ code: preflight.code }, { status: preflight.status });
@@ -105,7 +112,13 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // daily-count cap and the paid spend cap entirely. The CLI may still send that header for its
   // own tracing; nothing here reads it.
   const idempotencyKey = crypto.randomUUID();
-  const forwardBody: Record<string, unknown> = { ...body, session_id: sessionId };
+  // models/route/provider are OpenRouter's own routing-override fields, independent of `model`
+  // — the only field preflight/decidePreflight actually checks against the catalog. Forwarded
+  // unstripped, a Free-tier request could pass preflight on a zero-price `model` and add a
+  // priced `models` fallback (or `provider`/`route` overrides) that OpenRouter honors instead,
+  // spending Seri's key on a model preflight never approved.
+  const { models: _models, route: _route, provider: _provider, ...sanitizedBody } = body;
+  const forwardBody: Record<string, unknown> = { ...sanitizedBody, session_id: sessionId };
   if (stream) forwardBody.stream_options = { include_usage: true };
 
   // Written before the upstream call, with zero usage/cost, so an aborted or disconnected
@@ -116,10 +129,17 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // request keeps this row's provisional (zero) cost — full mid-stream cost tracking would need
   // parsing token deltas as they arrive, which this does not do; only the Free-tier request
   // count is guaranteed accurate on abort, not a paid request's exact spend.
-  await insertUsageEvent(
+  // insertUsageEvent's row is the only record that this attempt happened at all — if it fails
+  // to write, countRequestsToday/sumSpendThisMonth never learn about this request, so both the
+  // Free daily cap and the paid spend cap would stop enforcing while requests keep spending
+  // Seri's OpenRouter key. Refuse rather than forward when it does.
+  const recorded = await insertUsageEvent(
     supabase,
     provisionalRow({ idempotencyKey, userId: identity.userId, modelId }),
   );
+  if (!recorded) {
+    return Response.json({ code: "usage_ledger_unavailable" }, { status: 503 });
+  }
 
   const upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -154,7 +174,19 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     });
   }
 
-  const json = await upstream.json();
+  // Read as text first: an OK upstream response with a non-JSON body would otherwise reject
+  // upstream.json() directly, 500ing with no body and skipping updateUsageEvent entirely, so
+  // the provisional row above stays at its zero cost forever.
+  const text = await upstream.text();
+  let json: { usage?: unknown };
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return new Response(text, {
+      status: upstream.status,
+      headers: forwardableHeaders(upstream.headers),
+    });
+  }
   // Not awaited, same as the streaming path above: updateUsageEvent already logs its own
   // failures rather than throwing, so awaiting it here would only delay the response for no
   // benefit.

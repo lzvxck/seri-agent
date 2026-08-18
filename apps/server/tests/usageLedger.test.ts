@@ -43,13 +43,21 @@ describe("insertUsageEvent", () => {
     expect(calls[0]?.opts).toEqual({ onConflict: "idempotency_key", ignoreDuplicates: true });
   });
 
-  test("logs and resolves, never rejects, on a Supabase error", async () => {
+  test("resolves true on success", async () => {
+    const { client } = fakeSupabase();
+
+    await expect(insertUsageEvent(client, fakeRow())).resolves.toBe(true);
+  });
+
+  // The route's own call site refuses the request (503 usage_ledger_unavailable) when this
+  // comes back false — the caller needs to know the write failed, not just that it was logged.
+  test("logs and resolves false, never rejects, on a Supabase error", async () => {
     const { client } = fakeSupabase(new Error("write failed"));
     const errors: unknown[] = [];
     const original = console.error;
     console.error = (...args: unknown[]) => void errors.push(args);
 
-    await expect(insertUsageEvent(client, fakeRow())).resolves.toBeUndefined();
+    await expect(insertUsageEvent(client, fakeRow())).resolves.toBe(false);
 
     console.error = original;
     expect(errors).toHaveLength(1);
@@ -58,7 +66,7 @@ describe("insertUsageEvent", () => {
   // "Never throws, only logs" has to cover a rejected promise (network exception, timeout), not
   // just a resolved {error} field — a stub that throws instead of resolving with {error} is what
   // catches the difference.
-  test("logs and resolves, never rejects, when the Supabase call itself throws", async () => {
+  test("logs and resolves false, never rejects, when the Supabase call itself throws", async () => {
     const client = {
       from: () => ({
         upsert: () => {
@@ -70,9 +78,9 @@ describe("insertUsageEvent", () => {
     const original = console.error;
     console.error = (...args: unknown[]) => void errors.push(args);
 
-    await expect(
-      insertUsageEvent(client as unknown as SupabaseClient, fakeRow()),
-    ).resolves.toBeUndefined();
+    await expect(insertUsageEvent(client as unknown as SupabaseClient, fakeRow())).resolves.toBe(
+      false,
+    );
 
     console.error = original;
     expect(errors).toHaveLength(1);
