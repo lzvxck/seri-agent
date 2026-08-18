@@ -22,7 +22,7 @@ export type RouteDeps = {
 // Read-only: reuses readEntitlement/getAccountForToken, with no catalog lookup, no upstream
 // fetch, and no usage_events write — this route never charges anything, so a future change that
 // adds forwarding here would need its own quota gate. readEntitlement specifically, not
-// resolveEntitlement (CodeRabbit finding, PR #123): resolveEntitlement auto-provisions a Free
+// resolveEntitlement: resolveEntitlement auto-provisions a Free
 // Polar subscription for an unprovisioned account, which would make this GET create persistent
 // billing state as a side effect of a request that only exists to render UI. `plan: null` is a
 // normal, non-error 200 here — a brand-new account genuinely has no plan yet until its first real

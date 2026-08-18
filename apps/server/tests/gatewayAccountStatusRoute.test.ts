@@ -114,8 +114,8 @@ describe("handleGet — a product this deployment cannot name", () => {
   });
 });
 
-// CodeRabbit finding, PR #123: this GET used to call resolveEntitlement directly, which
-// auto-provisions a real Polar Free subscription for an account with no active subscription —
+// This GET used to call resolveEntitlement directly, which auto-provisions a real Polar Free
+// subscription for an account with no active subscription —
 // a read-only route creating persistent billing state as a side effect of rendering UI.
 describe("handleGet — a genuinely unprovisioned account never gets provisioned by this GET", () => {
   // Throws on any call a provisioning path would make — proves handleGet's own dependency chain

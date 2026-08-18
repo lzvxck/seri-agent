@@ -369,8 +369,8 @@ describe("resolveEntitlement", () => {
   });
 });
 
-// CodeRabbit finding, PR #123: apps/server/app/api/gateway/account-status/route.ts's GET used to
-// call resolveEntitlement directly, so a genuinely unprovisioned account made it auto-provision a
+// apps/server/app/api/gateway/account-status/route.ts's GET used to call resolveEntitlement
+// directly, so a genuinely unprovisioned account made it auto-provision a
 // real Polar Free subscription as a side effect of a read-only request. readEntitlement is the
 // non-provisioning alternative — these tests are the library-level proof, complementing
 // gatewayAccountStatusRoute.test.ts's own route-level ones.

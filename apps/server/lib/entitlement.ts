@@ -132,9 +132,9 @@ async function createFreeSubscription(
 
 /**
  * Read-only entitlement lookup for a caller that must never provision anything as a side effect
- * (apps/server/app/api/gateway/account-status/route.ts's own GET contract, CodeRabbit finding
- * PR #123: a read-only route was calling resolveEntitlement directly, so it could create a real
- * Polar Free subscription as a side effect of a request that only exists to render UI) — the
+ * (apps/server/app/api/gateway/account-status/route.ts's own GET contract: a read-only route
+ * calling resolveEntitlement directly could create a real Polar Free subscription as a side
+ * effect of a request that only exists to render UI) — the
  * stored plan if account_status already has one, otherwise a LIVE Polar read for an existing
  * subscription (paid or free). Returns null both for a brand-new, never-provisioned account and
  * for a subscription this deployment cannot identify — either way, nothing is created; a caller
