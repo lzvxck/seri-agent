@@ -8,10 +8,10 @@ import {
   planForProductId,
   productIdForPlan,
 } from "@seri/plans";
+import { claimProvisioning, completeProvisioning, releaseProvisioning } from "@seri/provisioning";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AccountForToken } from "./accountStatus";
 import { getCustomerState } from "./polar";
-import { claimProvisioning, completeProvisioning, releaseProvisioning } from "./provisioningClaim";
 import { fetchUserEmail } from "./workosUser";
 
 export type EntitlementDeps = {

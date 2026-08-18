@@ -1,11 +1,11 @@
 import type { Polar } from "@polar-sh/sdk";
 import type { CustomerState } from "@polar-sh/sdk/models/components/customerstate";
 import { type Plan, type ProductEnv, planForProductId, productIdForPlan } from "@seri/plans";
+import { claimProvisioning, completeProvisioning, releaseProvisioning } from "@seri/provisioning";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { type AccountStatus, readAccountStatus } from "./accountStatus";
 import { getCustomerState, getSubscription } from "./polar";
 import type { ScheduledChange } from "./scheduled";
-import { claimProvisioning, completeProvisioning, releaseProvisioning } from "./provisioningClaim";
 import type { SessionUser } from "./session";
 import { holdsOnlyFree, paidSubscription } from "./subscriptions";
 

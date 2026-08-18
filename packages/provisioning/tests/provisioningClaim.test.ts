@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  claimProvisioning,
-  completeProvisioning,
-  releaseProvisioning,
-} from "../lib/provisioningClaim";
+import { claimProvisioning, completeProvisioning, releaseProvisioning } from "../src";
 
 type ClaimRow = { workos_user_id: string; state: string; claimed_at: string; claim_token: string };
 type Filter = { column: keyof ClaimRow; op: "eq" | "lt"; value: string };
