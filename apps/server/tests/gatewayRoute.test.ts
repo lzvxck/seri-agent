@@ -244,6 +244,27 @@ describe("handlePost — refusal paths call the upstream fetch zero times", () =
   });
 });
 
+describe("handlePost — a getAccountForToken failure returns a structured error, not an unhandled exception", () => {
+  test("a thrown error from getAccountForToken is caught: 503 identity_lookup_error, zero upstream calls, zero ledger writes", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase, upserts } = fakeUsageSupabaseTracking();
+    const getAccountForToken = async () => {
+      throw new Error("supabase unreachable");
+    };
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken,
+      fetchFn,
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "identity_lookup_error" });
+    expect(upserts).toHaveLength(0);
+  });
+});
+
 describe("handlePost — a resolveEntitlement failure returns a structured error, not an unhandled exception", () => {
   // getCustomerState re-throws anything that isn't a 404 (lib/polar.ts's own rule) — a Polar
   // outage or a network failure reaching it, not a missing customer.

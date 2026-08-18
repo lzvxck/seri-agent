@@ -47,7 +47,16 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     return Response.json({ code: "unauthenticated" }, { status: 401 });
   }
 
-  const identity = await getAccountForToken(supabase, token);
+  // readAccountStatus (inside getAccountForToken) throws on a Supabase error that isn't a
+  // retryable clock-skew response, or once its retry budget is exhausted — an unhandled
+  // rejection here would 500 with no body, unlike every other failure path in this function.
+  let identity: AccountForToken | null;
+  try {
+    identity = await getAccountForToken(supabase, token);
+  } catch (error) {
+    console.error("getAccountForToken failed:", error);
+    return Response.json({ code: "identity_lookup_error" }, { status: 503 });
+  }
   if (!identity) {
     return Response.json({ code: "token_invalid" }, { status: 401 });
   }
@@ -175,8 +184,10 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   }
 
   // Read as text first: an OK upstream response with a non-JSON body would otherwise reject
-  // upstream.json() directly, 500ing with no body and skipping updateUsageEvent entirely, so
-  // the provisional row above stays at its zero cost forever.
+  // upstream.json() directly, 500ing with no body instead of the passthrough below. The
+  // provisional row's cost stays at zero either way here — there is no usage payload to update
+  // it with when the body isn't JSON — but the caller now gets OpenRouter's real body/status
+  // instead of an opaque crash.
   const text = await upstream.text();
   let json: { usage?: unknown };
   try {
