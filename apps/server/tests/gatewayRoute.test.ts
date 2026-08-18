@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD } from "@seri/plans";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { after as afterReal } from "next/server";
 import { handlePost } from "../app/api/gateway/chat/completions/route";
 import type { AccountForToken } from "../lib/accountStatus";
 import { FREE_DAILY_REQUEST_CAP, PAID_DAILY_REQUEST_CAP } from "../lib/quota";
@@ -92,6 +93,16 @@ function fakeUsageSupabaseTracking(
   };
   return { client: client as unknown as SupabaseClient, upserts, updates };
 }
+
+// next/server's real after() requires an actual Next.js request scope (workAsyncStorage),
+// which only exists when Next's own router invokes POST — calling handlePost directly the way
+// every test here does throws "called outside a request scope". This fake just runs the task
+// immediately, which is enough to observe its effects (the usage-ledger update) synchronously.
+// route.ts only ever passes a callback (never a bare promise), but the type has to match
+// after()'s own signature to satisfy RouteDeps.
+const fakeAfter: typeof afterReal = (task) => {
+  void (typeof task === "function" ? task() : task);
+};
 
 function neverFetch(): typeof fetch {
   return (async () => {
@@ -335,6 +346,25 @@ describe("handlePost — a usage-ledger write failure refuses the request instea
   });
 });
 
+describe("handlePost — an unreachable upstream returns a structured error, not an unhandled exception", () => {
+  test("fetchFn rejecting (network failure, DNS, abort) is caught: 503 upstream_unreachable", async () => {
+    const fetchFn = (async () => {
+      throw new Error("fetch failed");
+    }) as unknown as typeof fetch;
+    const { client: supabase } = fakeUsageSupabaseTracking({ costRows: [] });
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "upstream_unreachable" });
+  });
+});
+
 describe("handlePost — OpenRouter routing overrides are stripped before forwarding", () => {
   // A Free-tier request could otherwise pass preflight on a zero-price `model` and add a priced
   // `models` fallback (or `provider`/`route` overrides) that OpenRouter honors instead, spending
@@ -358,6 +388,7 @@ describe("handlePost — OpenRouter routing overrides are stripped before forwar
         polar: fakePolarWith([]),
         getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
         fetchFn,
+        after: fakeAfter,
       },
     );
 
@@ -424,6 +455,7 @@ describe("handlePost — the upstream Authorization header is never echoed back 
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
       fetchFn,
+      after: fakeAfter,
     });
     const text = await response.text();
 
@@ -454,6 +486,7 @@ describe("handlePost — stale compression headers are not forwarded", () => {
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
       fetchFn,
+      after: fakeAfter,
     });
 
     expect(response.headers.get("content-encoding")).toBeNull();
@@ -532,6 +565,7 @@ describe("handlePost — forwards the real upstream status on success, not a har
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
       fetchFn,
+      after: fakeAfter,
     });
 
     expect(response.status).toBe(201);
@@ -576,6 +610,7 @@ describe("handlePost — the idempotency key is minted server-side, never truste
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
       fetchFn,
+      after: fakeAfter,
     };
     const clientHeaders = { "X-Seri-Idempotency-Key": "client-constant-key" };
 
@@ -655,9 +690,11 @@ describe("handlePost — a normal completion updates the same row the provisiona
       polar: fakePolarWith([]),
       getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
       fetchFn,
+      after: fakeAfter,
     });
     await response.text();
-    // flush()'s own updateUsageEvent call is fire-and-forget (`void`d) — give it a tick to land.
+    // flush()'s own updateUsageEvent call runs inside after() (fakeAfter here), not awaited by
+    // the response — give it a tick to land.
     await Promise.resolve();
     await Promise.resolve();
 

@@ -55,6 +55,7 @@ function claimQuery(run: (filters: Filter[]) => ClaimRow[]) {
 function fakeSupabase(
   usageRows: Record<string, unknown>[] = [],
   claims: Map<string, ClaimRow> = new Map(),
+  opts: { deleteThrows?: boolean } = {},
 ) {
   const client = {
     from: (table: string) => {
@@ -95,12 +96,14 @@ function fakeSupabase(
             for (const r of hit) claims.set(r.workos_user_id, { ...r, ...patch });
             return hit;
           }),
-        delete: () =>
-          claimQuery((f) => {
+        delete: () => {
+          if (opts.deleteThrows) throw new Error("supabase delete failed");
+          return claimQuery((f) => {
             const hit = [...claims.values()].filter((r) => matches(r, f));
             for (const r of hit) claims.delete(r.workos_user_id);
             return hit;
-          }),
+          });
+        },
       };
     },
   };
@@ -203,6 +206,22 @@ describe("resolveEntitlement", () => {
     expect(calls[1]?.args).toEqual({ email: IDENTITY.email, externalId: IDENTITY.userId });
     expect(calls[2]?.args).toEqual({ productId: "prod_free", externalCustomerId: IDENTITY.userId });
     expect(claims.size).toBe(0);
+  });
+
+  // The fix: completeProvisioning failing after the subscription genuinely exists in Polar must
+  // not be reported as if provisioning itself failed — the caller already has what it asked for.
+  test("the claim is won but completeProvisioning's cleanup fails: still reports free, does not throw", async () => {
+    const { client: supabase } = fakeSupabase([], new Map(), { deleteThrows: true });
+    const { client: polar, calls } = fakePolar([null]);
+
+    const result = await resolveEntitlement(deps(supabase, polar), IDENTITY);
+
+    expect(result).toBe("free");
+    expect(calls.map((c) => c.method)).toEqual([
+      "customers.getStateExternal",
+      "customers.create",
+      "subscriptions.create",
+    ]);
   });
 
   // The other half of the same branch: a customer that already exists (Polar's own state read

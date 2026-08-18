@@ -102,7 +102,17 @@ async function createFreeSubscription(
     await releaseProvisioning(deps.supabase, identity.userId, claimToken);
     throw error;
   }
-  await completeProvisioning(deps.supabase, identity.userId, claimToken);
+  // The subscription now genuinely exists in Polar — completeProvisioning failing to clean up
+  // the claim row must not be reported as if provisioning itself failed (route.ts would 503 a
+  // user whose Free subscription was in fact just created). Worst case on failure here: the
+  // claim stays 'pending' until reclaimStale's window passes, during which other callers still
+  // correctly report "free" (Polar's own subscription read already reflects it), just without
+  // racing a duplicate create.
+  try {
+    await completeProvisioning(deps.supabase, identity.userId, claimToken);
+  } catch (error) {
+    console.error("completeProvisioning failed after a successful subscription create:", error);
+  }
 }
 
 /**

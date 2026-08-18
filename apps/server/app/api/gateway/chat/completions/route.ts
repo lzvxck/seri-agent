@@ -2,6 +2,7 @@ import type { Polar } from "@polar-sh/sdk";
 import { findCatalogEntry } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { after as afterReal } from "next/server";
 import {
   type AccountForToken,
   getAccountForToken as getAccountForTokenReal,
@@ -27,6 +28,11 @@ export type RouteDeps = {
   polar?: Polar;
   getAccountForToken?: (supabase: SupabaseClient, token: string) => Promise<AccountForToken | null>;
   fetchFn?: typeof fetch;
+  // next/server's after() requires an actual Next.js request scope (workAsyncStorage), which
+  // only exists when Next's own router invokes POST below — calling handlePost directly, the
+  // way every test in this file does, throws "called outside a request scope". Overridable for
+  // exactly that reason, the same seam every other real dependency here already has.
+  after?: typeof afterReal;
 };
 
 // Next.js's build-time route-handler validator checks POST's declared signature against its
@@ -40,6 +46,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   const polar = deps.polar ?? getPolarClient();
   const getAccountForToken = deps.getAccountForToken ?? getAccountForTokenReal;
   const fetchFn = deps.fetchFn ?? fetch;
+  const after = deps.after ?? afterReal;
 
   const auth = request.headers.get("Authorization");
   const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined;
@@ -150,15 +157,26 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     return Response.json({ code: "usage_ledger_unavailable" }, { status: 503 });
   }
 
-  const upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.SERI_OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(forwardBody),
-    signal: request.signal,
-  });
+  // Unlike every other fallible step above, an unreachable/timed-out OpenRouter or a client
+  // disconnect (this request's own AbortSignal firing) rejects this call directly — an unhandled
+  // rejection here would 500 with no body rather than the structured response every other
+  // failure path in this function returns. The provisional row above already recorded the
+  // attempt either way.
+  let upstream: Response;
+  try {
+    upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.SERI_OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(forwardBody),
+      signal: request.signal,
+    });
+  } catch (error) {
+    console.error("upstream fetch failed:", error);
+    return Response.json({ code: "upstream_unreachable" }, { status: 503 });
+  }
 
   // A non-OK upstream response is returned to the caller as-is. The provisional row above
   // already recorded the attempt; nothing further is written here.
@@ -173,9 +191,15 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
 
   if (stream) {
     const usageTap = createUsageTap((usage) => {
-      // Not awaited: the response has already streamed to the caller by the time flush() runs,
-      // so a ledger write failure must not be able to affect it either way.
-      void updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId));
+      // Scheduled via after(), not just `void`d: this deploys as a Vercel serverless function
+      // (apps/server/vercel.json), which can freeze/tear down the invocation as soon as the
+      // response body is fully flushed to the caller — a bare `void` update racing that teardown
+      // could be killed mid-write, permanently leaving this row at its provisional cost_usd: 0
+      // and silently undercounting a paid user's spend. after() keeps the invocation alive until
+      // this callback settles. A ledger write failure inside it must still not be able to affect
+      // the response, which has already streamed by the time flush() runs — updateUsageEvent
+      // itself never throws, only logs.
+      after(() => updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId)));
     });
     return new Response(upstream.body.pipeThrough(usageTap), {
       status: upstream.status,
@@ -198,10 +222,12 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
       headers: forwardableHeaders(upstream.headers),
     });
   }
-  // Not awaited, same as the streaming path above: updateUsageEvent already logs its own
-  // failures rather than throwing, so awaiting it here would only delay the response for no
-  // benefit.
-  void updateUsageEvent(supabase, idempotencyKey, usageUpdate(json.usage, entry, requestId));
+  // Scheduled via after(), same as the streaming path above and for the same reason: awaiting it
+  // here would delay the response for no benefit, but a bare `void` risks the Vercel invocation
+  // being torn down before this write lands.
+  after(() =>
+    updateUsageEvent(supabase, idempotencyKey, usageUpdate(json.usage, entry, requestId)),
+  );
   return Response.json(json, {
     status: upstream.status,
     headers: forwardableHeaders(upstream.headers),

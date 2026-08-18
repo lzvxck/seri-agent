@@ -11,12 +11,21 @@ const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ1JXPJK16ADCG718H7C6VRM";
 // and spend Seri's OpenRouter key. Only outside production does a missing env var fall back to
 // DEFAULT_WORKOS_CLIENT_ID; in production it resolves to undefined, and getJwks/verifyAccessToken
 // below fail closed on that rather than reaching for the Staging default.
+//
+// VERCEL_ENV, not NODE_ENV, is what actually distinguishes a Vercel preview deployment from a
+// real production one: `next build` sets NODE_ENV=production for BOTH (a Vercel preview build is
+// still a production build), so checking NODE_ENV alone would fail-close preview deployments too
+// — contradicting the "preview deploys verify correctly with no env var set" claim above. Off
+// Vercel entirely (VERCEL_ENV unset — local dev, or a self-hosted deployment), NODE_ENV is the
+// only signal available, so it's used as the fallback there.
 export function resolveWorkosClientId(
   env: Record<string, string | undefined> = process.env,
 ): string | undefined {
   const clientId = env.SERI_WORKOS_CLIENT_ID?.trim();
   if (clientId) return clientId;
-  return env.NODE_ENV === "production" ? undefined : DEFAULT_WORKOS_CLIENT_ID;
+  const isProduction =
+    env.VERCEL_ENV === "production" || (!env.VERCEL_ENV && env.NODE_ENV === "production");
+  return isProduction ? undefined : DEFAULT_WORKOS_CLIENT_ID;
 }
 
 // Same laziness as getSupabaseClient (lib/supabase.ts): createRemoteJWKSet owns its own

@@ -111,8 +111,29 @@ describe("resolveWorkosClientId", () => {
   // The fix: production must fail closed instead of silently verifying against Staging's JWKS,
   // which would let a Staging-issued token authenticate gateway requests and spend Seri's
   // OpenRouter key.
-  test("in production, a missing client id resolves to undefined instead of the Staging default", () => {
+  test("in production (no VERCEL_ENV — a self-hosted deployment), a missing client id resolves to undefined", () => {
     expect(resolveWorkosClientId({ NODE_ENV: "production" })).toBeUndefined();
+  });
+
+  // The regression this guards against: `next build` sets NODE_ENV=production for a Vercel
+  // preview deployment too (preview builds are still production builds) — checking NODE_ENV
+  // alone would fail-close preview deploys, contradicting this file's own "preview deploys
+  // verify correctly with no env var set" comment. VERCEL_ENV is what actually distinguishes
+  // "preview" from "production" on Vercel.
+  test("VERCEL_ENV=preview falls back to the Staging default even though NODE_ENV=production", () => {
+    expect(resolveWorkosClientId({ NODE_ENV: "production", VERCEL_ENV: "preview" })).toBeDefined();
+  });
+
+  test("VERCEL_ENV=production fails closed, matching NODE_ENV=production", () => {
+    expect(
+      resolveWorkosClientId({ NODE_ENV: "production", VERCEL_ENV: "production" }),
+    ).toBeUndefined();
+  });
+
+  test("VERCEL_ENV=development (a Vercel dev-mode invocation) falls back to the Staging default", () => {
+    expect(
+      resolveWorkosClientId({ NODE_ENV: "production", VERCEL_ENV: "development" }),
+    ).toBeDefined();
   });
 });
 
