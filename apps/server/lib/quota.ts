@@ -1,4 +1,9 @@
-import { findCatalogEntry, type ModelCatalog, type ModelCatalogEntry } from "@seri/model-catalog";
+import {
+  findCatalogEntry,
+  isZeroPriceEntry,
+  type ModelCatalog,
+  type ModelCatalogEntry,
+} from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD, type Plan } from "@seri/plans";
 import type { RawUsage } from "./streamUsage";
 
@@ -36,16 +41,8 @@ export function resolvePaidDailyCap(raw: string | undefined): number {
 
 export const PAID_DAILY_REQUEST_CAP = resolvePaidDailyCap(process.env.SERI_PAID_DAILY_REQUESTS);
 
-// A missing catalog entry, or an entry whose `pricing` is `undefined` (which means "unknown",
-// not "free"), is NOT zero-price — fail closed, the same posture catalog.ts's empty-manifest
-// fallback takes.
 export function isZeroPriceModel(catalog: ModelCatalog, modelId: string): boolean {
-  const entry = findCatalogEntry(catalog, modelId, "openrouter");
-  return (
-    entry?.pricing !== undefined &&
-    entry.pricing.inputPerMTok === 0 &&
-    entry.pricing.outputPerMTok === 0
-  );
+  return isZeroPriceEntry(findCatalogEntry(catalog, modelId, "openrouter"));
 }
 
 export type PreflightInput = {

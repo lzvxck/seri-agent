@@ -52,6 +52,27 @@ function holdsOnlyFree(subscriptions: ActiveSubscription[], env: ProductEnv): bo
   return subscriptions.every((s) => planForProductId(s.productId, env) === "free");
 }
 
+// The classification readEntitlement and resolveEntitlement both need from a CustomerState read
+// they each do themselves (see readEntitlement's own comment on why that read isn't shared) —
+// "unprovisioned" (no active subscription at all) is the one outcome only resolveEntitlement acts
+// on, by auto-provisioning a Free subscription; readEntitlement's own contract is to never do
+// that, so it treats "unprovisioned" the same as `null` (active, but not something either caller
+// can fully account for — stacking Free on top of a product neither can identify risks charging
+// twice, the same predicate apps/portal/lib/provisioning.ts refuses to provision over).
+function classifyActiveSubscription(
+  subscriptions: ActiveSubscription[],
+  env: ProductEnv,
+): Plan | "unprovisioned" | null {
+  const paid = paidSubscription(subscriptions, env);
+  if (paid) return paid.plan;
+
+  if (subscriptions.length > 0) {
+    return holdsOnlyFree(subscriptions, env) ? "free" : null;
+  }
+
+  return "unprovisioned";
+}
+
 /*
  * What a stored identity is worth, in one place. Mirrors apps/portal/lib/provisioning.ts's own
  * storedPlan: a revoked/past_due/canceled row would report the plan the account used to be on,
@@ -59,6 +80,26 @@ function holdsOnlyFree(subscriptions: ActiveSubscription[], env: ProductEnv): bo
  */
 function storedPlan(identity: AccountForToken): Plan | null {
   return identity.status === "active" && identity.plan ? identity.plan : null;
+}
+
+// The read-then-classify prefix readEntitlement and resolveEntitlement both start from: the
+// stored plan on account_status if one exists, otherwise a live classification of the caller's
+// Polar subscriptions. Each caller still does its OWN getCustomerState call (readEntitlement's own
+// comment explains why that read itself isn't shared across the two) — this only dedupes the
+// identical three statements around it, not the request-scoped read. `state` is only ever read by
+// resolveEntitlement's own createFreeSubscription call, reached only when `classified` comes back
+// "unprovisioned" — which never happens on the `stored` shortcut below, so `state` there (`null`)
+// is never actually consulted.
+async function classifiedOrStoredPlan(
+  deps: Pick<EntitlementDeps, "polar" | "products">,
+  identity: AccountForToken,
+): Promise<{ classified: Plan | "unprovisioned" | null; state: CustomerState | null }> {
+  const stored = storedPlan(identity);
+  if (stored) return { classified: stored, state: null };
+
+  const state = await getCustomerState(deps.polar, identity.userId);
+  const classified = classifyActiveSubscription(state?.activeSubscriptions ?? [], deps.products);
+  return { classified, state };
 }
 
 /*
@@ -131,6 +172,30 @@ async function createFreeSubscription(
 }
 
 /**
+ * Read-only entitlement lookup for a caller that must never provision anything as a side effect
+ * (apps/server/app/api/gateway/account-status/route.ts's own GET contract: a read-only route
+ * calling resolveEntitlement directly could create a real Polar Free subscription as a side
+ * effect of a request that only exists to render UI) — the
+ * stored plan if account_status already has one, otherwise a LIVE Polar read for an existing
+ * subscription (paid or free). Returns null both for a brand-new, never-provisioned account and
+ * for a subscription this deployment cannot identify — either way, nothing is created; a caller
+ * that needs the auto-provisioning behavior for a real chargeable request must use
+ * resolveEntitlement instead.
+ *
+ * Deliberately its own `getCustomerState` call rather than sharing resolveEntitlement's — the two
+ * routes that call these never call both for the same request, so there is no double read to
+ * dedupe, and threading a shared read through would put a provisioning-only concern (the raw
+ * CustomerState createFreeSubscription needs) into this function's own contract for no benefit.
+ */
+export async function readEntitlement(
+  deps: Pick<EntitlementDeps, "polar" | "products">,
+  identity: AccountForToken,
+): Promise<Plan | null> {
+  const { classified } = await classifiedOrStoredPlan(deps, identity);
+  return classified === "unprovisioned" ? null : classified;
+}
+
+/**
  * Resolves the plan a request should be judged against, auto-provisioning a Free subscription
  * when the account holds no active subscription at all.
  *
@@ -144,21 +209,8 @@ export async function resolveEntitlement(
   deps: EntitlementDeps,
   identity: AccountForToken,
 ): Promise<Plan | null> {
-  const stored = storedPlan(identity);
-  if (stored) return stored;
-
-  const state = await getCustomerState(deps.polar, identity.userId);
-  const subscriptions = state?.activeSubscriptions ?? [];
-
-  const paid = paidSubscription(subscriptions, deps.products);
-  if (paid) return paid.plan;
-
-  // Active, but not something we can fully account for. Stacking Free on top of a product we
-  // cannot identify risks charging twice — same predicate apps/portal/lib/provisioning.ts
-  // refuses to provision over.
-  if (subscriptions.length > 0) {
-    return holdsOnlyFree(subscriptions, deps.products) ? "free" : null;
-  }
+  const { classified, state } = await classifiedOrStoredPlan(deps, identity);
+  if (classified !== "unprovisioned") return classified;
 
   const freeProductId = productIdForPlan("free", deps.products);
   if (!freeProductId) throw new Error("POLAR_PRODUCT_FREE is not set");
