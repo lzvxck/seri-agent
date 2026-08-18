@@ -28,8 +28,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 const STALE_CLAIM_MS = 60_000;
 
 /**
- * Returns true if this caller may create the Free subscription. Exactly one concurrent
- * caller gets true; a caller whose predecessor died gets it back after STALE_CLAIM_MS.
+ * Returns the claim's ownership token if this caller may create the Free subscription, or null
+ * if another caller already holds it. Exactly one concurrent caller gets a token; a caller
+ * whose predecessor died gets it back after STALE_CLAIM_MS. completeProvisioning and
+ * releaseProvisioning both require this exact token, so a caller can only ever clean up the
+ * claim it currently holds — never one a later reclaim has since taken over.
  *
  * The insert commits on its own. No transaction is held open across the Polar call that
  * follows — a third-party HTTP request must never sit inside a row lock.
@@ -37,21 +40,22 @@ const STALE_CLAIM_MS = 60_000;
 export async function claimProvisioning(
   supabase: SupabaseClient,
   workosUserId: string,
-): Promise<boolean> {
+): Promise<string | null> {
+  const claimToken = crypto.randomUUID();
   // ON CONFLICT DO NOTHING ... RETURNING: rows come back only when this statement was the
   // one that inserted, which is the winner/loser signal. The unique constraint on the
   // primary key is what makes it atomic, so no read-then-write gap exists to lose.
   const { data, error } = await supabase
     .from("provisioning_claims")
     .upsert(
-      { workos_user_id: workosUserId },
+      { workos_user_id: workosUserId, claim_token: claimToken },
       { onConflict: "workos_user_id", ignoreDuplicates: true },
     )
     .select("workos_user_id");
   if (error) throw error;
-  if ((data?.length ?? 0) > 0) return true;
+  if ((data?.length ?? 0) > 0) return claimToken;
 
-  return reclaimStale(supabase, workosUserId);
+  return reclaimStale(supabase, workosUserId, claimToken);
 }
 
 /*
@@ -60,50 +64,65 @@ export async function claimProvisioning(
  *
  * The takeover is a single conditional UPDATE ... RETURNING, so it is atomic on its own. Two
  * reclaimers racing cannot both win — the first moves claimed_at forward, and the second's
- * `claimed_at < cutoff` no longer matches, so it updates nothing and comes back false.
+ * `claimed_at < cutoff` no longer matches, so it updates nothing and comes back false. Writing
+ * a fresh claim_token here (not just claimed_at) is what invalidates the original, presumed-dead
+ * claimant's token — if it wakes up after all and calls completeProvisioning/releaseProvisioning
+ * with its old token, that no longer matches this row and it is a no-op instead of a deletion of
+ * the reclaimer's live claim.
  */
-async function reclaimStale(supabase: SupabaseClient, workosUserId: string): Promise<boolean> {
+async function reclaimStale(
+  supabase: SupabaseClient,
+  workosUserId: string,
+  claimToken: string,
+): Promise<string | null> {
   const cutoff = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
   const { data, error } = await supabase
     .from("provisioning_claims")
-    .update({ claimed_at: new Date().toISOString() })
+    .update({ claimed_at: new Date().toISOString(), claim_token: claimToken })
     .eq("workos_user_id", workosUserId)
     .eq("state", "pending")
     .lt("claimed_at", cutoff)
     .select("workos_user_id");
   if (error) throw error;
-  return (data?.length ?? 0) > 0;
+  return (data?.length ?? 0) > 0 ? claimToken : null;
 }
 
 /*
  * Releases the claim by deleting it, because the claim's lifetime is the operation's, not the
  * customer's — apps/portal/lib/provisioningClaim.ts's own comment on why leaving a "done" row
- * behind quietly makes the barrier permanent still applies here, being the same table.
+ * behind quietly makes the barrier permanent still applies here, being the same table. Scoped to
+ * claimToken so a stale claimant that wakes up after being reclaimed cannot delete a live claim
+ * it no longer owns.
  */
 export async function completeProvisioning(
   supabase: SupabaseClient,
   workosUserId: string,
+  claimToken: string,
 ): Promise<void> {
   const { error } = await supabase
     .from("provisioning_claims")
     .delete()
-    .eq("workos_user_id", workosUserId);
+    .eq("workos_user_id", workosUserId)
+    .eq("claim_token", claimToken);
   if (error) throw error;
 }
 
 /*
  * Hands the claim back when provisioning failed, so the next caller retries immediately rather
  * than waiting out the stale window. Best effort: the caller is already throwing the real
- * error, and losing this only costs the delay the stale takeover exists to bound.
+ * error, and losing this only costs the delay the stale takeover exists to bound. Scoped to
+ * claimToken for the same reason completeProvisioning is.
  */
 export async function releaseProvisioning(
   supabase: SupabaseClient,
   workosUserId: string,
+  claimToken: string,
 ): Promise<void> {
   const { error } = await supabase
     .from("provisioning_claims")
     .delete()
     .eq("workos_user_id", workosUserId)
-    .eq("state", "pending");
+    .eq("state", "pending")
+    .eq("claim_token", claimToken);
   if (error) console.warn(`Could not release provisioning claim for ${workosUserId}:`, error);
 }

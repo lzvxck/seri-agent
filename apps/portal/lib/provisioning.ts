@@ -48,14 +48,15 @@ async function createFreeSubscription(
   deps: ProvisioningDeps,
   userId: string,
   freeProductId: string,
+  claimToken: string,
 ) {
   try {
     await deps.polar.subscriptions.create({ productId: freeProductId, externalCustomerId: userId });
   } catch (error) {
-    await releaseProvisioning(deps.supabase, userId);
+    await releaseProvisioning(deps.supabase, userId, claimToken);
     throw error;
   }
-  await completeProvisioning(deps.supabase, userId);
+  await completeProvisioning(deps.supabase, userId, claimToken);
 }
 
 /**
@@ -223,7 +224,8 @@ export async function ensureProvisioned(
    * get this far before any subscription exists, so the claim — not the read above — is what
    * makes creation happen once.
    */
-  if (!(await claimProvisioning(deps.supabase, user.userId))) {
+  const claimToken = await claimProvisioning(deps.supabase, user.userId);
+  if (!claimToken) {
     /*
      * Another render holds the claim and is creating the subscription right now. Look once
      * more in case it has already landed; otherwise report Free without creating anything.
@@ -243,7 +245,7 @@ export async function ensureProvisioned(
     return { plan: "free", scheduled: null, renewsAt: null, amount: null };
   }
 
-  await createFreeSubscription(deps, user.userId, freeProductId);
+  await createFreeSubscription(deps, user.userId, freeProductId, claimToken);
 
   // Returned rather than re-read: the webhook that writes the row has not necessarily
   // arrived yet, and only later visits depend on it.

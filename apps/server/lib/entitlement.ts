@@ -90,6 +90,7 @@ async function createFreeSubscription(
   identity: AccountForToken,
   freeProductId: string,
   existing: CustomerState | null,
+  claimToken: string,
 ): Promise<void> {
   try {
     await ensureCustomer(deps, identity, existing);
@@ -98,10 +99,10 @@ async function createFreeSubscription(
       externalCustomerId: identity.userId,
     });
   } catch (error) {
-    await releaseProvisioning(deps.supabase, identity.userId);
+    await releaseProvisioning(deps.supabase, identity.userId, claimToken);
     throw error;
   }
-  await completeProvisioning(deps.supabase, identity.userId);
+  await completeProvisioning(deps.supabase, identity.userId, claimToken);
 }
 
 /**
@@ -139,13 +140,14 @@ export async function resolveEntitlement(
 
   // Reached concurrently: two turns from the same user can both get this far before either has
   // created anything, so the claim — not the read above — is what makes creation happen once.
-  if (!(await claimProvisioning(deps.supabase, identity.userId))) {
+  const claimToken = await claimProvisioning(deps.supabase, identity.userId);
+  if (!claimToken) {
     // Another caller holds the claim and is creating the subscription right now. Report Free
     // without creating anything — the winner's subscription is moments away.
     return "free";
   }
 
-  await createFreeSubscription(deps, identity, freeProductId, state);
+  await createFreeSubscription(deps, identity, freeProductId, state, claimToken);
   return "free";
 }
 

@@ -25,7 +25,7 @@ const IDENTITY: AccountForToken = {
   status: null,
 };
 
-type ClaimRow = { workos_user_id: string; state: string; claimed_at: string };
+type ClaimRow = { workos_user_id: string; state: string; claimed_at: string; claim_token: string };
 type Filter = { column: keyof ClaimRow; op: "eq" | "lt"; value: string };
 
 function matches(row: ClaimRow, filters: Filter[]): boolean {
@@ -71,7 +71,10 @@ function fakeSupabase(
         };
       }
       return {
-        upsert: (values: { workos_user_id: string }, options: { ignoreDuplicates?: boolean }) => ({
+        upsert: (
+          values: { workos_user_id: string; claim_token: string },
+          options: { ignoreDuplicates?: boolean },
+        ) => ({
           select: () => {
             if (!options?.ignoreDuplicates)
               throw new Error("claim insert must use ignoreDuplicates");
@@ -81,6 +84,7 @@ function fakeSupabase(
               workos_user_id: id,
               state: "pending",
               claimed_at: new Date().toISOString(),
+              claim_token: values.claim_token,
             });
             return Promise.resolve({ data: [{ workos_user_id: id }], error: null });
           },
@@ -232,7 +236,12 @@ describe("resolveEntitlement", () => {
     const held = new Map([
       [
         "user_01H",
-        { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() },
+        {
+          workos_user_id: "user_01H",
+          state: "pending",
+          claimed_at: new Date().toISOString(),
+          claim_token: "other-caller-token",
+        },
       ],
     ]);
     const { client: supabase } = fakeSupabase([], held);

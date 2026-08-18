@@ -13,7 +13,7 @@ const PRODUCTS = {
 
 const USER = { userId: "user_01H", email: "someone@seriora.ai" };
 
-type ClaimRow = { workos_user_id: string; state: string; claimed_at: string };
+type ClaimRow = { workos_user_id: string; state: string; claimed_at: string; claim_token: string };
 type Filter = { column: keyof ClaimRow; op: "eq" | "lt"; value: string };
 
 function matches(row: ClaimRow, filters: Filter[]): boolean {
@@ -68,7 +68,10 @@ function fakeSupabase(
         };
       }
       return {
-        upsert: (values: { workos_user_id: string }, options: { ignoreDuplicates?: boolean }) => ({
+        upsert: (
+          values: { workos_user_id: string; claim_token: string },
+          options: { ignoreDuplicates?: boolean },
+        ) => ({
           select: () => {
             // A plain upsert would overwrite the winner's claim instead of reporting the
             // conflict, so the fake refuses to model anything but ON CONFLICT DO NOTHING.
@@ -80,6 +83,7 @@ function fakeSupabase(
               workos_user_id: id,
               state: "pending",
               claimed_at: new Date().toISOString(),
+              claim_token: values.claim_token,
             });
             return Promise.resolve({ data: [{ workos_user_id: id }], error: null });
           },
@@ -652,7 +656,12 @@ describe("ensureProvisioned under concurrent renders", () => {
     const held = new Map([
       [
         "user_01H",
-        { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() },
+        {
+          workos_user_id: "user_01H",
+          state: "pending",
+          claimed_at: new Date().toISOString(),
+          claim_token: "other-caller-token",
+        },
       ],
     ]);
     const { client: supabase } = fakeSupabase(null, held);
@@ -673,7 +682,12 @@ describe("ensureProvisioned under concurrent renders", () => {
     const held = new Map([
       [
         "user_01H",
-        { workos_user_id: "user_01H", state: "pending", claimed_at: new Date().toISOString() },
+        {
+          workos_user_id: "user_01H",
+          state: "pending",
+          claimed_at: new Date().toISOString(),
+          claim_token: "other-caller-token",
+        },
       ],
     ]);
     const { client: supabase } = fakeSupabase(null, held);
@@ -697,6 +711,7 @@ describe("ensureProvisioned under concurrent renders", () => {
           workos_user_id: "user_01H",
           state: "pending",
           claimed_at: new Date(Date.now() - 120_000).toISOString(),
+          claim_token: "stale-caller-token",
         },
       ],
     ]);
@@ -719,6 +734,7 @@ describe("ensureProvisioned under concurrent renders", () => {
           workos_user_id: "user_01H",
           state: "pending",
           claimed_at: new Date(Date.now() - 120_000).toISOString(),
+          claim_token: "stale-caller-token",
         },
       ],
     ]);
