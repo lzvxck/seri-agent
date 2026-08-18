@@ -253,13 +253,10 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   }
   const stream = body.stream === true;
 
-  const products = {
-    POLAR_PRODUCT_FREE: process.env.POLAR_PRODUCT_FREE,
-    POLAR_PRODUCT_PRO: process.env.POLAR_PRODUCT_PRO,
-    POLAR_PRODUCT_MAX: process.env.POLAR_PRODUCT_MAX,
-    POLAR_PRODUCT_ULTRA: process.env.POLAR_PRODUCT_ULTRA,
-  };
-  const entitlement = await resolveEntitlement({ supabase, polar, products }, identity);
+  const entitlement = await resolveEntitlement(
+    { supabase, polar, products: process.env },
+    identity,
+  );
   const plan = entitlement.plan;
   if (!plan) {
     return Response.json({ code: "unknown_plan" }, { status: 402 });
