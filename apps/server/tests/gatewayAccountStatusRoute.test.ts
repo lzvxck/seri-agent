@@ -151,7 +151,7 @@ describe("handleGet — a genuinely unprovisioned account never gets provisioned
 });
 
 describe("handleGet — success", () => {
-  test("a stored free-plan account: 200 { plan: \"free\" }", async () => {
+  test('a stored free-plan account: 200 { plan: "free" }', async () => {
     const response = await handleGet(accountStatusRequest(), {
       supabase: noopSupabase,
       polar: fakePolarWith([]),
@@ -162,7 +162,7 @@ describe("handleGet — success", () => {
     expect(await response.json()).toEqual({ plan: "free" });
   });
 
-  test("a stored pro-plan account: 200 { plan: \"pro\" }", async () => {
+  test('a stored pro-plan account: 200 { plan: "pro" }', async () => {
     const response = await handleGet(accountStatusRequest(), {
       supabase: noopSupabase,
       polar: fakePolarWith([]),
