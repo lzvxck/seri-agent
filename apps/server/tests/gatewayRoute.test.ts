@@ -433,6 +433,29 @@ describe("insertUsageEvent", () => {
     console.error = original;
     expect(errors).toHaveLength(1);
   });
+
+  // "Never throws, only logs" has to cover a rejected promise (network exception, timeout), not
+  // just a resolved {error} field — a stub that throws instead of resolving with {error} is what
+  // catches the difference.
+  test("logs and resolves, never rejects, when the Supabase call itself throws", async () => {
+    const client = {
+      from: () => ({
+        upsert: () => {
+          throw new Error("network exception");
+        },
+      }),
+    };
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+
+    await expect(
+      insertUsageEvent(client as unknown as SupabaseClient, { idempotency_key: "idem-1" }),
+    ).resolves.toBeUndefined();
+
+    console.error = original;
+    expect(errors).toHaveLength(1);
+  });
 });
 
 describe("updateUsageEvent", () => {
@@ -468,6 +491,29 @@ describe("updateUsageEvent", () => {
     console.error = (...args: unknown[]) => void errors.push(args);
 
     await expect(updateUsageEvent(client, "idem-1", { input_tokens: 5 })).resolves.toBeUndefined();
+
+    console.error = original;
+    expect(errors).toHaveLength(1);
+  });
+
+  // Same as insertUsageEvent's own: a rejected promise is caught too, not just a resolved
+  // {error} field. route.ts's own `void updateUsageEvent(...)` call site relies on this — a
+  // fire-and-forget call is only safe once the function genuinely never rejects.
+  test("logs and resolves, never rejects, when the Supabase call itself throws", async () => {
+    const client = {
+      from: () => ({
+        update: () => {
+          throw new Error("network exception");
+        },
+      }),
+    };
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+
+    await expect(
+      updateUsageEvent(client as unknown as SupabaseClient, "idem-1", { input_tokens: 5 }),
+    ).resolves.toBeUndefined();
 
     console.error = original;
     expect(errors).toHaveLength(1);
@@ -851,6 +897,57 @@ describe("handlePost — stale compression headers are not forwarded", () => {
     expect(response.status).toBe(502);
     expect(response.headers.get("content-encoding")).toBeNull();
     expect(response.headers.get("content-length")).toBeNull();
+  });
+});
+
+describe("handlePost — forwards the real upstream status on success, not a hardcoded 200", () => {
+  beforeAll(() => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+  });
+  afterAll(() => {
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+  });
+
+  test("non-streaming: the response status matches upstream's, not the default 200", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase: fakeUsageSupabase({ costRows: [] }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(201);
+  });
+
+  test("streaming: the response status matches upstream's, not the default 200", async () => {
+    const sseBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{}}]}\n\n'));
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const fetchFn = (async () =>
+      new Response(sseBody, {
+        status: 206,
+        headers: { "Content-Type": "text/event-stream" },
+      })) as unknown as typeof fetch;
+
+    const response = await handlePost(gatewayRequest({ model: "m", stream: true }), {
+      supabase: fakeUsageSupabase({ costRows: [] }),
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+    await response.text();
+
+    expect(response.status).toBe(206);
   });
 });
 

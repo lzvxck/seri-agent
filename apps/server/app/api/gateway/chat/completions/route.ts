@@ -274,13 +274,11 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // unlimited usage, only unbounded-until-caught-up. A real fix would make the count-and-insert
   // one atomic DB operation (a Postgres RPC); out of scope while burst size stays small enough
   // not to matter in practice.
-  const preflight = decidePreflight({
-    plan,
-    modelId,
-    catalog,
-    requestsToday: await countRequestsToday(supabase, identity.userId),
-    spendUsd: plan === "free" ? 0 : await sumSpendThisMonth(supabase, identity.userId),
-  });
+  const [requestsToday, spendUsd] = await Promise.all([
+    countRequestsToday(supabase, identity.userId),
+    plan === "free" ? Promise.resolve(0) : sumSpendThisMonth(supabase, identity.userId),
+  ]);
+  const preflight = decidePreflight({ plan, modelId, catalog, requestsToday, spendUsd });
   if (!preflight.allow) {
     return Response.json({ code: preflight.code }, { status: preflight.status });
   }
@@ -348,6 +346,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
       );
     });
     return new Response(upstream.body.pipeThrough(usageTap), {
+      status: upstream.status,
       headers: forwardableHeaders(upstream.headers),
     });
   }
@@ -368,7 +367,10 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
       requestId,
     }),
   );
-  return Response.json(json, { headers: forwardableHeaders(upstream.headers) });
+  return Response.json(json, {
+    status: upstream.status,
+    headers: forwardableHeaders(upstream.headers),
+  });
 }
 
 export const POST = (request: Request): Promise<Response> => handlePost(request);

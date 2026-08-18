@@ -10,10 +10,16 @@ export async function insertUsageEvent(
   supabase: SupabaseClient,
   row: Record<string, unknown>,
 ): Promise<void> {
-  const { error } = await supabase
-    .from("usage_events")
-    .upsert(row, { onConflict: "idempotency_key", ignoreDuplicates: true });
-  if (error) console.error("Failed to write usage_events row:", error);
+  try {
+    const { error } = await supabase
+      .from("usage_events")
+      .upsert(row, { onConflict: "idempotency_key", ignoreDuplicates: true });
+    if (error) console.error("Failed to write usage_events row:", error);
+  } catch (error) {
+    // A rejected promise (network exception, timeout) is not just a resolved {error} field —
+    // caught here too, or "never throws" above would only be true for half of the failure modes.
+    console.error("Failed to write usage_events row:", error);
+  }
 }
 
 // Fills in the provisional row's real usage/cost once the request completes — an UPDATE, not a
@@ -24,9 +30,13 @@ export async function updateUsageEvent(
   idempotencyKey: string,
   row: Record<string, unknown>,
 ): Promise<void> {
-  const { error } = await supabase
-    .from("usage_events")
-    .update(row)
-    .eq("idempotency_key", idempotencyKey);
-  if (error) console.error("Failed to update usage_events row:", error);
+  try {
+    const { error } = await supabase
+      .from("usage_events")
+      .update(row)
+      .eq("idempotency_key", idempotencyKey);
+    if (error) console.error("Failed to update usage_events row:", error);
+  } catch (error) {
+    console.error("Failed to update usage_events row:", error);
+  }
 }
