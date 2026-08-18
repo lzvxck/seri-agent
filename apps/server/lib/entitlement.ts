@@ -8,7 +8,12 @@ import {
   planForProductId,
   productIdForPlan,
 } from "@seri/plans";
-import { claimProvisioning, completeProvisioning, releaseProvisioning } from "@seri/provisioning";
+import {
+  claimProvisioning,
+  completeProvisioning,
+  POLAR_CALL_TIMEOUT_MS,
+  releaseProvisioning,
+} from "@seri/provisioning";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AccountForToken } from "./accountStatus";
 import { getCustomerState } from "./polar";
@@ -78,7 +83,13 @@ async function ensureCustomer(
   const fetchEmail = deps.fetchEmail ?? fetchUserEmail;
   const email = identity.email ?? (await fetchEmail(identity.userId));
   try {
-    await deps.polar.customers.create({ email: email ?? "", externalId: identity.userId });
+    // Bounded well under STALE_CLAIM_MS (packages/provisioning's own POLAR_CALL_TIMEOUT_MS) —
+    // @polar-sh/sdk has no default timeout, and an unbounded call here could still be in flight
+    // after reclaimStale hands this user's claim to a second caller.
+    await deps.polar.customers.create(
+      { email: email ?? "", externalId: identity.userId },
+      { timeoutMs: POLAR_CALL_TIMEOUT_MS },
+    );
   } catch (error) {
     const raced = await getCustomerState(deps.polar, identity.userId);
     if (!raced) throw error;
@@ -94,10 +105,14 @@ async function createFreeSubscription(
 ): Promise<void> {
   try {
     await ensureCustomer(deps, identity, existing);
-    await deps.polar.subscriptions.create({
-      productId: freeProductId,
-      externalCustomerId: identity.userId,
-    });
+    // Same bound as ensureCustomer's own customers.create, and for the same reason: this is the
+    // call CodeRabbit's own review flagged directly — an unbounded subscriptions.create left in
+    // flight past reclaimStale's window is exactly how two callers both end up creating a Free
+    // subscription for the same user.
+    await deps.polar.subscriptions.create(
+      { productId: freeProductId, externalCustomerId: identity.userId },
+      { timeoutMs: POLAR_CALL_TIMEOUT_MS },
+    );
   } catch (error) {
     await releaseProvisioning(deps.supabase, identity.userId, claimToken);
     throw error;

@@ -26,13 +26,26 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 /*
  * How long a `pending` claim is honoured before another caller may take it over.
  *
- * A claim is held across exactly one Polar call, so this only has to exceed the longest such
- * call that could still be in flight. Serverless invocations are killed well inside a minute, so
- * after 60s a pending claim means the claimant is gone rather than slow. Shorter would risk two
- * live callers both provisioning; much longer would strand a user behind a dead claim for no
- * reason, since the repair costs them one retry.
+ * A claim is held across the Polar calls createFreeSubscription makes while holding it, so this
+ * only has to exceed the longest those could still be in flight — which is a guarantee, not an
+ * assumption: @polar-sh/sdk has no default request timeout (an unconfigured call can hang
+ * indefinitely), so every caller of claimProvisioning is expected to pass an explicit timeoutMs
+ * to its own Polar calls, bounded well under this value (see POLAR_CALL_TIMEOUT_MS, exported
+ * below, sized as a fraction of it). Without that bound, a caller whose subscriptions.create is
+ * merely slow — not dead — could still be completing after reclaimStale hands the claim to a
+ * second caller, and both would create a subscription. Serverless invocations are killed well
+ * inside a minute, so once a caller's own bounded Polar calls are guaranteed to have settled, a
+ * pending claim past 60s means the claimant is gone rather than slow. Shorter would risk two live
+ * callers both provisioning; much longer would strand a user behind a dead claim for no reason,
+ * since the repair costs them one retry.
  */
-const STALE_CLAIM_MS = 60_000;
+export const STALE_CLAIM_MS = 60_000;
+
+// A quarter of STALE_CLAIM_MS, so even a caller that makes two sequential bounded Polar calls
+// while holding the claim (apps/server's own ensureCustomer + subscriptions.create) uses at most
+// half the stale window in the worst case — comfortable margin against Supabase round-trips,
+// clock skew between processes, and JS event-loop overhead eating into the rest.
+export const POLAR_CALL_TIMEOUT_MS = STALE_CLAIM_MS / 4;
 
 /**
  * Returns the claim's ownership token if this caller may create the Free subscription, or null

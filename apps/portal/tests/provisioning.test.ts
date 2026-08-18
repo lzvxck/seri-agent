@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
+import { POLAR_CALL_TIMEOUT_MS, STALE_CLAIM_MS } from "@seri/provisioning";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ensureProvisioned } from "../lib/provisioning";
 import type { ActiveSubscription } from "../lib/subscriptions";
@@ -617,6 +618,7 @@ describe("ensureProvisioned under concurrent renders", () => {
 
   function fanOutPolar(activeSubscriptions: ActiveSubscription[] = []) {
     let creates = 0;
+    const createOptions: unknown[] = [];
     const client = {
       customers: {
         getStateExternal: () => Promise.resolve({ activeSubscriptions }),
@@ -626,13 +628,14 @@ describe("ensureProvisioned under concurrent renders", () => {
         // Nothing scheduled: these tests are about how many subscriptions get created, not
         // about what is booked against them.
         get: (args: { id: string }) => Promise.resolve({ id: args.id, pendingUpdate: null }),
-        create: () => {
+        create: (_args: unknown, options?: unknown) => {
           creates += 1;
+          createOptions.push(options);
           return Promise.resolve({ id: `sub_${creates}` });
         },
       },
     };
-    return { client: client as unknown as Polar, creates: () => creates };
+    return { client: client as unknown as Polar, creates: () => creates, createOptions };
   }
 
   test(`creates exactly one free subscription across ${RENDERS} concurrent renders`, async () => {
@@ -648,6 +651,22 @@ describe("ensureProvisioned under concurrent renders", () => {
     expect(creates()).toBe(1);
     expect(results).toHaveLength(RENDERS);
     expect(results.every((r) => r.plan === "free")).toBe(true);
+  });
+
+  // The fix for a CodeRabbit finding on the extracted @seri/provisioning package:
+  // @polar-sh/sdk has no default request timeout, so an unbounded subscriptions.create call held
+  // under this user's claim could still be in flight after reclaimStale hands the claim to a
+  // second render — both would then create a subscription.
+  test("subscriptions.create carries a timeout bounded well under STALE_CLAIM_MS", async () => {
+    const { client: supabase } = fakeSupabase(null);
+    const { client: polar, createOptions } = fanOutPolar();
+
+    await ensureProvisioned({ supabase, polar, products: PRODUCTS }, USER);
+
+    expect((createOptions[0] as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(
+      POLAR_CALL_TIMEOUT_MS,
+    );
+    expect(POLAR_CALL_TIMEOUT_MS).toBeLessThan(STALE_CLAIM_MS / 2);
   });
 
   // The losers' half of the same guarantee, isolated: a claim already held by someone else

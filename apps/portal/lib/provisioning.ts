@@ -1,7 +1,12 @@
 import type { Polar } from "@polar-sh/sdk";
 import type { CustomerState } from "@polar-sh/sdk/models/components/customerstate";
 import { type Plan, type ProductEnv, planForProductId, productIdForPlan } from "@seri/plans";
-import { claimProvisioning, completeProvisioning, releaseProvisioning } from "@seri/provisioning";
+import {
+  claimProvisioning,
+  completeProvisioning,
+  POLAR_CALL_TIMEOUT_MS,
+  releaseProvisioning,
+} from "@seri/provisioning";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { type AccountStatus, readAccountStatus } from "./accountStatus";
 import { getCustomerState, getSubscription } from "./polar";
@@ -51,7 +56,13 @@ async function createFreeSubscription(
   claimToken: string,
 ) {
   try {
-    await deps.polar.subscriptions.create({ productId: freeProductId, externalCustomerId: userId });
+    // Bounded well under STALE_CLAIM_MS (packages/provisioning's own POLAR_CALL_TIMEOUT_MS) —
+    // @polar-sh/sdk has no default timeout, and an unbounded call here could still be in flight
+    // after reclaimStale hands this user's claim to a second caller: two Free subscriptions.
+    await deps.polar.subscriptions.create(
+      { productId: freeProductId, externalCustomerId: userId },
+      { timeoutMs: POLAR_CALL_TIMEOUT_MS },
+    );
   } catch (error) {
     await releaseProvisioning(deps.supabase, userId, claimToken);
     throw error;

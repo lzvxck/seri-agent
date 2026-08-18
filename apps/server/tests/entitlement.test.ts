@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
+import { POLAR_CALL_TIMEOUT_MS, STALE_CLAIM_MS } from "@seri/provisioning";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AccountForToken } from "../lib/accountStatus";
 import {
@@ -117,7 +118,7 @@ function polarError(statusCode: number) {
 }
 
 function fakePolar(states: FakeState[], throwOn?: "customers.create" | "subscriptions.create") {
-  const calls: { method: string; args: unknown }[] = [];
+  const calls: { method: string; args: unknown; options?: unknown }[] = [];
   let index = 0;
   const client = {
     customers: {
@@ -126,16 +127,16 @@ function fakePolar(states: FakeState[], throwOn?: "customers.create" | "subscrip
         const state = states[Math.min(index++, states.length - 1)] ?? null;
         return state ? Promise.resolve(state) : Promise.reject(polarError(404));
       },
-      create: (args: unknown) => {
-        calls.push({ method: "customers.create", args });
+      create: (args: unknown, options?: unknown) => {
+        calls.push({ method: "customers.create", args, options });
         return throwOn === "customers.create"
           ? Promise.reject(polarError(422))
           : Promise.resolve({ id: "cus_1" });
       },
     },
     subscriptions: {
-      create: (args: unknown) => {
-        calls.push({ method: "subscriptions.create", args });
+      create: (args: unknown, options?: unknown) => {
+        calls.push({ method: "subscriptions.create", args, options });
         return throwOn === "subscriptions.create"
           ? Promise.reject(polarError(409))
           : Promise.resolve({ id: "sub_1" });
@@ -206,6 +207,28 @@ describe("resolveEntitlement", () => {
     expect(calls[1]?.args).toEqual({ email: IDENTITY.email, externalId: IDENTITY.userId });
     expect(calls[2]?.args).toEqual({ productId: "prod_free", externalCustomerId: IDENTITY.userId });
     expect(claims.size).toBe(0);
+  });
+
+  // The fix for a CodeRabbit finding on the extracted @seri/provisioning package:
+  // @polar-sh/sdk has no default request timeout, so an unbounded customers.create/
+  // subscriptions.create call could still be in flight after reclaimStale hands this user's
+  // claim to a second caller — both would then create a subscription. Both Polar calls made
+  // while holding the claim must be bounded well under STALE_CLAIM_MS.
+  test("both Polar calls made while holding the claim carry a timeout bounded well under STALE_CLAIM_MS", async () => {
+    const { client: supabase } = fakeSupabase();
+    const { client: polar, calls } = fakePolar([null]);
+
+    await resolveEntitlement(deps(supabase, polar), IDENTITY);
+
+    const create = calls.find((c) => c.method === "customers.create");
+    const subscribe = calls.find((c) => c.method === "subscriptions.create");
+    expect((create?.options as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(
+      POLAR_CALL_TIMEOUT_MS,
+    );
+    expect((subscribe?.options as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(
+      POLAR_CALL_TIMEOUT_MS,
+    );
+    expect(POLAR_CALL_TIMEOUT_MS).toBeLessThan(STALE_CLAIM_MS / 2);
   });
 
   // The fix: completeProvisioning failing after the subscription genuinely exists in Polar must
