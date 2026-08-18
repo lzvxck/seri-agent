@@ -9,7 +9,7 @@ import {
   SignJWT,
 } from "jose";
 import { getAccountForToken } from "../lib/accountStatus";
-import { verifyAccessToken } from "../lib/workosToken";
+import { resolveWorkosClientId, verifyAccessToken } from "../lib/workosToken";
 
 type Sign = (overrides?: { sub?: string; email?: string; expSeconds?: number }) => Promise<string>;
 
@@ -73,6 +73,46 @@ describe("verifyAccessToken", () => {
     const token = await sign({});
 
     expect(await verifyAccessToken(token, jwks)).not.toBeNull();
+  });
+
+  // The fail-closed case: production with no client id resolved. No key material can verify
+  // any token against `undefined`, so this must return null rather than throw.
+  test("returns null, not a throw, when keys resolves to undefined", async () => {
+    const { sign } = await testJwks();
+    const token = await sign({});
+
+    expect(await verifyAccessToken(token, undefined)).toBeNull();
+  });
+});
+
+describe("resolveWorkosClientId", () => {
+  test("an explicit SERI_WORKOS_CLIENT_ID always wins, in any environment", () => {
+    expect(resolveWorkosClientId({ SERI_WORKOS_CLIENT_ID: "client_explicit" })).toBe(
+      "client_explicit",
+    );
+    expect(
+      resolveWorkosClientId({ SERI_WORKOS_CLIENT_ID: "client_explicit", NODE_ENV: "production" }),
+    ).toBe("client_explicit");
+  });
+
+  test("a blank SERI_WORKOS_CLIENT_ID is treated the same as unset", () => {
+    expect(resolveWorkosClientId({ SERI_WORKOS_CLIENT_ID: "   " })).toBeDefined();
+    expect(
+      resolveWorkosClientId({ SERI_WORKOS_CLIENT_ID: "   ", NODE_ENV: "production" }),
+    ).toBeUndefined();
+  });
+
+  test("outside production, a missing client id falls back to the Staging default", () => {
+    expect(resolveWorkosClientId({})).toBeDefined();
+    expect(resolveWorkosClientId({ NODE_ENV: "development" })).toBeDefined();
+    expect(resolveWorkosClientId({ NODE_ENV: "test" })).toBeDefined();
+  });
+
+  // The fix: production must fail closed instead of silently verifying against Staging's JWKS,
+  // which would let a Staging-issued token authenticate gateway requests and spend Seri's
+  // OpenRouter key.
+  test("in production, a missing client id resolves to undefined instead of the Staging default", () => {
+    expect(resolveWorkosClientId({ NODE_ENV: "production" })).toBeUndefined();
   });
 });
 
