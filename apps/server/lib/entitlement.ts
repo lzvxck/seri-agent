@@ -82,6 +82,26 @@ function storedPlan(identity: AccountForToken): Plan | null {
   return identity.status === "active" && identity.plan ? identity.plan : null;
 }
 
+// The read-then-classify prefix readEntitlement and resolveEntitlement both start from: the
+// stored plan on account_status if one exists, otherwise a live classification of the caller's
+// Polar subscriptions. Each caller still does its OWN getCustomerState call (readEntitlement's own
+// comment explains why that read itself isn't shared across the two) — this only dedupes the
+// identical three statements around it, not the request-scoped read. `state` is only ever read by
+// resolveEntitlement's own createFreeSubscription call, reached only when `classified` comes back
+// "unprovisioned" — which never happens on the `stored` shortcut below, so `state` there (`null`)
+// is never actually consulted.
+async function classifiedOrStoredPlan(
+  deps: Pick<EntitlementDeps, "polar" | "products">,
+  identity: AccountForToken,
+): Promise<{ classified: Plan | "unprovisioned" | null; state: CustomerState | null }> {
+  const stored = storedPlan(identity);
+  if (stored) return { classified: stored, state: null };
+
+  const state = await getCustomerState(deps.polar, identity.userId);
+  const classified = classifyActiveSubscription(state?.activeSubscriptions ?? [], deps.products);
+  return { classified, state };
+}
+
 /*
  * Creates the Polar customer only when `existing` (the customer-state read resolveEntitlement
  * already did) came back empty — mirrors apps/portal/lib/provisioning.ts's ensureCustomer,
@@ -171,11 +191,7 @@ export async function readEntitlement(
   deps: Pick<EntitlementDeps, "polar" | "products">,
   identity: AccountForToken,
 ): Promise<Plan | null> {
-  const stored = storedPlan(identity);
-  if (stored) return stored;
-
-  const state = await getCustomerState(deps.polar, identity.userId);
-  const classified = classifyActiveSubscription(state?.activeSubscriptions ?? [], deps.products);
+  const { classified } = await classifiedOrStoredPlan(deps, identity);
   return classified === "unprovisioned" ? null : classified;
 }
 
@@ -193,11 +209,7 @@ export async function resolveEntitlement(
   deps: EntitlementDeps,
   identity: AccountForToken,
 ): Promise<Plan | null> {
-  const stored = storedPlan(identity);
-  if (stored) return stored;
-
-  const state = await getCustomerState(deps.polar, identity.userId);
-  const classified = classifyActiveSubscription(state?.activeSubscriptions ?? [], deps.products);
+  const { classified, state } = await classifiedOrStoredPlan(deps, identity);
   if (classified !== "unprovisioned") return classified;
 
   const freeProductId = productIdForPlan("free", deps.products);
