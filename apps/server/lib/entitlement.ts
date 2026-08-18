@@ -12,11 +12,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AccountForToken } from "./accountStatus";
 import { getCustomerState } from "./polar";
 import { claimProvisioning, completeProvisioning, releaseProvisioning } from "./provisioningClaim";
+import { fetchUserEmail } from "./workosUser";
 
 export type EntitlementDeps = {
   supabase: SupabaseClient;
   polar: Polar;
   products: ProductEnv;
+  // Overridable for tests; defaults to the real WorkOS lookup (./workosUser). Only consulted by
+  // ensureCustomer, and only when identity.email is missing.
+  fetchEmail?: (userId: string) => Promise<string | undefined>;
 };
 
 /*
@@ -60,15 +64,23 @@ function storedPlan(identity: AccountForToken): Plan | null {
  * if the customer is there now, the failure was our own race.
  */
 async function ensureCustomer(
-  polar: Polar,
+  deps: EntitlementDeps,
   identity: AccountForToken,
   existing: CustomerState | null,
 ): Promise<void> {
   if (existing) return;
+  // The JWT never carries an email claim (lib/workosToken.ts's own verifyAccessToken), so this
+  // is the only place that email is ever missing and worth fetching — every other caller of
+  // resolveEntitlement takes the stored/JWT identity as-is. Polar's CustomerIndividualCreate.email
+  // is a required string with no way to omit it; if the WorkOS lookup also comes back empty, the
+  // "" below is what it was before this fetch existed, and customers.create's own rejection of
+  // that still propagates to resolveEntitlement's caller exactly as it did already.
+  const fetchEmail = deps.fetchEmail ?? fetchUserEmail;
+  const email = identity.email ?? (await fetchEmail(identity.userId));
   try {
-    await polar.customers.create({ email: identity.email ?? "", externalId: identity.userId });
+    await deps.polar.customers.create({ email: email ?? "", externalId: identity.userId });
   } catch (error) {
-    const raced = await getCustomerState(polar, identity.userId);
+    const raced = await getCustomerState(deps.polar, identity.userId);
     if (!raced) throw error;
   }
 }
@@ -80,7 +92,7 @@ async function createFreeSubscription(
   existing: CustomerState | null,
 ): Promise<void> {
   try {
-    await ensureCustomer(deps.polar, identity, existing);
+    await ensureCustomer(deps, identity, existing);
     await deps.polar.subscriptions.create({
       productId: freeProductId,
       externalCustomerId: identity.userId,

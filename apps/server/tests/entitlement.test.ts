@@ -254,6 +254,56 @@ describe("resolveEntitlement", () => {
     expect(claims.size).toBe(0);
   });
 
+  // The negative control this fix exists for: before it, ensureCustomer passed
+  // `identity.email ?? ""` straight to Polar with no attempt to look one up, so a real WorkOS
+  // account with no email claim on its JWT (the normal case — lib/workosToken.ts's own
+  // verifyAccessToken confirms real tokens carry none) got provisioned with an empty-string
+  // email.
+  test("identity.email missing: falls back to the injected WorkOS lookup, and Polar is created with that email, not an empty string", async () => {
+    const { client: supabase } = fakeSupabase();
+    const { client: polar, calls } = fakePolar([null]);
+    const noEmailIdentity: AccountForToken = { ...IDENTITY, email: null };
+    const fetchEmail = async (userId: string) => {
+      expect(userId).toBe(noEmailIdentity.userId);
+      return "fetched@example.com";
+    };
+
+    const result = await resolveEntitlement(
+      { ...deps(supabase, polar), fetchEmail },
+      noEmailIdentity,
+    );
+
+    expect(result).toBe("free");
+    expect(calls.find((c) => c.method === "customers.create")?.args).toEqual({
+      email: "fetched@example.com",
+      externalId: noEmailIdentity.userId,
+    });
+  });
+
+  // The exhausted case: neither the JWT nor the WorkOS lookup has an email. Polar's
+  // CustomerIndividualCreate.email is a required string with no way to omit it, so the call
+  // still goes out with "" — what this test guards is that its rejection propagates rather than
+  // being swallowed, the same as any other customers.create failure (see "releases the claim
+  // and propagates when creating the subscription fails" above). The gatewayRoute.test.ts
+  // handlePost test covers the same rejection reaching a 503 entitlement_error response; this
+  // one isolates that it is specifically the empty-email call that failed.
+  test("identity.email missing and the WorkOS lookup also comes back empty: the empty-email Polar rejection propagates, not swallowed", async () => {
+    const { client: supabase, claims } = fakeSupabase();
+    const { client: polar, calls } = fakePolar([null], "customers.create");
+    const noEmailIdentity: AccountForToken = { ...IDENTITY, email: null };
+    const fetchEmail = async () => undefined;
+
+    await expect(
+      resolveEntitlement({ ...deps(supabase, polar), fetchEmail }, noEmailIdentity),
+    ).rejects.toThrow("polar responded 422");
+
+    expect(calls.find((c) => c.method === "customers.create")?.args).toEqual({
+      email: "",
+      externalId: noEmailIdentity.userId,
+    });
+    expect(claims.size).toBe(0);
+  });
+
   test("an account holding a product this deployment cannot name resolves to a null plan", async () => {
     const { client: supabase } = fakeSupabase();
     const { client: polar, calls } = fakePolar([
