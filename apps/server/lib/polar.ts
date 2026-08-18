@@ -1,5 +1,6 @@
 import { Polar } from "@polar-sh/sdk";
 import type { CustomerState } from "@polar-sh/sdk/models/components/customerstate";
+import { POLAR_CALL_TIMEOUT_MS } from "@seri/provisioning";
 
 let client: Polar | undefined;
 
@@ -23,13 +24,20 @@ export function polarStatusCode(error: unknown): number | undefined {
   return typeof status === "number" ? status : undefined;
 }
 
-// Polar answers a missing customer with 404; anything else is a real failure.
+// Polar answers a missing customer with 404; anything else is a real failure. Bounded the same
+// way entitlement.ts's own customers.create/subscriptions.create calls are (POLAR_CALL_TIMEOUT_MS)
+// — @polar-sh/sdk has no default timeout, and this is the read every entitlement lookup starts
+// from, so an unbounded call here blocks both the read-only account-status route and every paid
+// gateway request behind it.
 export async function getCustomerState(
   polar: Polar,
   userId: string,
 ): Promise<CustomerState | null> {
   try {
-    return await polar.customers.getStateExternal({ externalId: userId });
+    return await polar.customers.getStateExternal(
+      { externalId: userId },
+      { timeoutMs: POLAR_CALL_TIMEOUT_MS },
+    );
   } catch (error) {
     if (polarStatusCode(error) === 404) return null;
     throw error;

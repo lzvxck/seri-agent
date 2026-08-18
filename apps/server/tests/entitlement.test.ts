@@ -123,8 +123,8 @@ function fakePolar(states: FakeState[], throwOn?: "customers.create" | "subscrip
   let index = 0;
   const client = {
     customers: {
-      getStateExternal: (args: unknown) => {
-        calls.push({ method: "customers.getStateExternal", args });
+      getStateExternal: (args: unknown, options?: unknown) => {
+        calls.push({ method: "customers.getStateExternal", args, options });
         const state = states[Math.min(index++, states.length - 1)] ?? null;
         return state ? Promise.resolve(state) : Promise.reject(polarError(404));
       },
@@ -230,6 +230,23 @@ describe("resolveEntitlement", () => {
       POLAR_CALL_TIMEOUT_MS,
     );
     expect(POLAR_CALL_TIMEOUT_MS).toBeLessThan(STALE_CLAIM_MS / 2);
+  });
+
+  // A second CodeRabbit finding on the same call class: getCustomerState (lib/polar.ts) is the
+  // read every readEntitlement/resolveEntitlement call starts from — @polar-sh/sdk has no default
+  // timeout there either, so an unbounded lookup here would block the read-only account-status
+  // route and every paid gateway request behind it, not just the provisioning path the test above
+  // covers.
+  test("the initial customer-state read also carries a timeout bounded well under STALE_CLAIM_MS", async () => {
+    const { client: supabase } = fakeSupabase();
+    const { client: polar, calls } = fakePolar([null]);
+
+    await resolveEntitlement(deps(supabase, polar), IDENTITY);
+
+    const read = calls.find((c) => c.method === "customers.getStateExternal");
+    expect((read?.options as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(
+      POLAR_CALL_TIMEOUT_MS,
+    );
   });
 
   // The fix: completeProvisioning failing after the subscription genuinely exists in Polar must
