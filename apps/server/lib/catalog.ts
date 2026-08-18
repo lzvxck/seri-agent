@@ -5,10 +5,12 @@ import { loadCatalog, type ModelCatalog } from "@seri/model-catalog";
 // request is refused rather than forwarded on seri's own key.
 const EMPTY_MANIFEST: ModelCatalog = { fetchedAt: "", entries: [] };
 
-// loadCatalog already caches the in-flight promise itself (process-lifetime), so this only
-// needs to supply the two arguments a caller in this app would otherwise repeat everywhere.
-// "Process-lifetime" is per server instance: a cold start (a new deployment, an autoscaled
-// instance) refetches once and caches for its own lifetime, not across instances.
+// loadCatalog already caches the in-flight promise itself, so this only needs to supply the two
+// arguments a caller in this app would otherwise repeat everywhere. A successful fetch caches
+// for the process's lifetime (per server instance: a cold start refetches once, not across
+// instances); a fetch that falls back to EMPTY_MANIFEST is NOT cached that long — loadCatalog
+// retries on the next call rather than returning 402 model_not_in_free_tier to every Free
+// request for the rest of the instance's life over one transient models.dev failure.
 export function getModelCatalog(): Promise<ModelCatalog> {
   return loadCatalog(EMPTY_MANIFEST, fetch);
 }
