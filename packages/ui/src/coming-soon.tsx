@@ -98,8 +98,8 @@ export function ComingSoon({
         <p className="holding-wordmark mb-13 font-mono text-on-ink-subtle uppercase tracking-[3px]">
           {wordmark}
         </p>
-        <h1 className="holding-headline max-w-[16ch] text-[40px] leading-[1.1] font-bold tracking-[-1.2px] md:text-[68px] md:tracking-[-2px]">
-          Coming soon
+        <h1 className="holding-headline max-w-[22ch] text-[30px] leading-[1.1] font-bold tracking-[-1.2px] md:text-[56px] md:tracking-[-2px]">
+          Building self improving agents for LLMs.
         </h1>
         <p className="holding-line mt-13 max-w-[52ch] text-on-ink-subtle md:mt-16 md:text-[16px]/[1.5]">
           {line}

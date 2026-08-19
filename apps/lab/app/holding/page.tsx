@@ -29,7 +29,7 @@ export default function Holding() {
   return (
     <ComingSoon
       wordmark="Seriora Research"
-      line="An independent research lab working on agents that learn from their own work."
+      line="We research how agents can learn from their own experience, improve their behavior, and compound their capabilities over time."
       after={<WaitlistForm />}
     />
   );
