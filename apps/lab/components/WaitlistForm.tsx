@@ -1,8 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
-
 import { Button } from "@seri/ui";
+import { useActionState } from "react";
 
 import { submitWaitlistEmail } from "@/app/actions/waitlist";
 import { HONEYPOT_FIELD, WAITLIST_INITIAL } from "@/lib/waitlist/shared";
@@ -18,7 +17,7 @@ export function WaitlistForm() {
   const [state, formAction, pending] = useActionState(submitWaitlistEmail, WAITLIST_INITIAL);
 
   return (
-    <section className="holding-waitlist relative z-10 w-full px-11 pt-29 pb-29 md:pt-34 md:pb-34">
+    <section className="holding-waitlist relative z-10 w-full pt-16 md:pt-20">
       <div className="mx-auto flex w-full max-w-[420px] flex-col items-center">
         <form action={formAction} className="flex w-full flex-col gap-8">
           <label htmlFor="waitlist-email" className="text-on-ink-subtle">
