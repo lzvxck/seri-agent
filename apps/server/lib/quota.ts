@@ -47,8 +47,7 @@ export function isZeroPriceModel(catalog: ModelCatalog, modelId: string): boolea
 
 export type PreflightInput = {
   plan: Plan;
-  modelId: string;
-  catalog: ModelCatalog;
+  entry: ModelCatalogEntry | undefined;
   requestsToday: number;
   spendUsd: number; // paid only
 };
@@ -71,7 +70,7 @@ export function decidePreflight(input: PreflightInput): PreflightDecision {
     if (input.requestsToday >= FREE_DAILY_REQUEST_CAP) {
       return { allow: false, status: 402, code: "free_daily_cap" };
     }
-    if (!isZeroPriceModel(input.catalog, input.modelId)) {
+    if (!isZeroPriceEntry(input.entry)) {
       return { allow: false, status: 402, code: "model_not_in_free_tier" };
     }
     return { allow: true };
