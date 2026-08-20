@@ -28,9 +28,11 @@ themselves, just diluted — not new hues.
 explicit research-spec decision. This system fits inside that rather than fighting it: paper and
 ink read as the terminal's own default foreground and a reverse-video block, `ink-soft` *is* just
 `gray`, and there's no accent hue left to assign — that's the palette's whole point, not a gap in
-it. `theme.userBg` (`"gray"`, the transcript's user-message background band) is a confirmed,
-deliberate second use of background color, not a new hue — same ANSI-16 tone `muted` already
-uses, just as a background instead of a foreground.
+it. `theme.userBg` (the transcript's user-message background band) is a confirmed, deliberate
+second use of background color, not a new hue. It is the one token in this file that is an
+explicit hex value (`"#333333"`, a dark charcoal) rather than an ANSI-16 name: plain `"gray"`
+downsampled to a near-white, illegible-contrast background on a real terminal — a hex value
+renders the same dark shade regardless of how a given terminal resolves ANSI-16 names.
 
 ## Type — two faces, one voice each
 
