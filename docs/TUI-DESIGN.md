@@ -28,7 +28,11 @@ themselves, just diluted — not new hues.
 explicit research-spec decision. This system fits inside that rather than fighting it: paper and
 ink read as the terminal's own default foreground and a reverse-video block, `ink-soft` *is* just
 `gray`, and there's no accent hue left to assign — that's the palette's whole point, not a gap in
-it.
+it. `theme.userBg` (the transcript's user-message background band) is a confirmed, deliberate
+second use of background color, not a new hue. It is the one token in this file that is an
+explicit hex value (`"#333333"`, a dark charcoal) rather than an ANSI-16 name: plain `"gray"`
+downsampled to a near-white, illegible-contrast background on a real terminal — a hex value
+renders the same dark shade regardless of how a given terminal resolves ANSI-16 names.
 
 ## Type — two faces, one voice each
 
@@ -107,8 +111,10 @@ in this system needs a fifth color, because selection is a background swap, not 
 
 One asymmetry worth stating plainly: this doc's own web preview owns its background; the TUI does
 not. "Paper" above is shorthand for whatever background the person's own terminal already has —
-the palette governs foreground text and borders, and the one place a background gets set on
-purpose is the reverse-video row, via Ink's `backgroundColor` prop.
+the palette governs foreground text and borders, and there are now two places a background gets
+set on purpose, both via Ink's `backgroundColor` prop: the reverse-video row (`selected`), and the
+transcript's user-message background band (`theme.userBg`, `App.tsx`) — a confirmed, deliberate
+departure from the one-background rule this section used to state, not an oversight of it.
 
 ## Provenance
 

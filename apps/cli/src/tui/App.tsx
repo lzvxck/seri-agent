@@ -19,6 +19,7 @@ import {
   useWindowSize,
 } from "ink";
 import { useEffect, useReducer, useRef, useState } from "react";
+import stringWidth from "string-width";
 import { truncateArgsDisplay } from "../cli/output";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { ResolvedRoute } from "../provider/routing";
@@ -29,6 +30,7 @@ import {
   FALLBACK_CHROME_ROWS,
   formatModeLabel,
   transcriptVisualRows,
+  type VisibleRow,
   visibleTranscript,
 } from "./format";
 import { ApprovalBox } from "./panels/ApprovalBox";
@@ -189,6 +191,22 @@ function useTerminalWidth(): number {
   return width;
 }
 
+// One visibleTranscript row's own render props — factored out, not inlined into the JSX below, for
+// the same reason ListRow (components.tsx) is: ink-testing-library's `lastFrame()` carries no ANSI
+// in this test environment, so `backgroundColor` is otherwise invisible to a mounted-frame
+// assertion; calling this directly lets a test pin the actual prop instead of the frame text.
+export function transcriptRowProps(
+  row: VisibleRow,
+  columns: number,
+): { text: string; backgroundColor: string | undefined } {
+  if (row.role !== "user") return { text: row.text, backgroundColor: undefined };
+  // `padEnd` counts UTF-16 units, not terminal cells — a CJK/wide-char row would overpad past
+  // `columns`. `stringWidth` measures display width instead (same measure `wrap-ansi` already
+  // uses to wrap this same text upstream).
+  const padding = " ".repeat(Math.max(0, columns - stringWidth(row.text)));
+  return { text: row.text + padding, backgroundColor: theme.userBg };
+}
+
 export function App({
   session,
   route,
@@ -260,12 +278,21 @@ export function App({
   // renders a gap instead of a full page. `transcriptScrollStreamingRows` is the reducer's own
   // snapshot of what was already baked in, so only the delta needs compensating for here.
   const pendingRows =
-    state.streaming.length > 0 ? transcriptVisualRows([state.streaming], state.columns) : 0;
+    state.streaming.length > 0
+      ? transcriptVisualRows([{ role: "assistant", text: state.streaming }], state.columns)
+      : 0;
   const transcriptOffset =
     state.transcriptScrollOffset > 0
       ? state.transcriptScrollOffset +
         Math.max(0, pendingRows - state.transcriptScrollStreamingRows)
       : 0;
+
+  // A transcript shorter than the viewport top-anchors instead of tail-anchors: bottom-pinning a
+  // half-empty screen (the default below, `flex-end`) reads as a mostly-blank terminal until the
+  // session grows past `viewportRows`, rather than starting at the top the way a real terminal's
+  // own scrollback does.
+  const contentRows = state.totalVisualRows + pendingRows;
+  const isShort = contentRows < viewportRows;
 
   // `columns`/`viewportRows` live on TuiState itself (reducer.ts's own comment on those fields) —
   // this is the one place that ever measures them, so it's the one place that ever dispatches them
@@ -372,7 +399,7 @@ export function App({
         flexShrink={1}
         minHeight={0}
         overflowY="hidden"
-        justifyContent="flex-end"
+        justifyContent={isShort ? "flex-start" : "flex-end"}
       >
         {visibleTranscript(
           state.transcript,
@@ -380,9 +407,14 @@ export function App({
           transcriptOffset,
           state.columns,
           state.streaming,
-        ).map((line, index) => (
-          <Text key={index}>{line}</Text>
-        ))}
+        ).map((row, index) => {
+          const { text, backgroundColor } = transcriptRowProps(row, state.columns);
+          return (
+            <Text key={index} backgroundColor={backgroundColor}>
+              {text}
+            </Text>
+          );
+        })}
       </Box>
       {state.pendingTool !== undefined && (
         <Box borderStyle="single" borderColor={theme.warning}>
