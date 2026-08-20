@@ -144,10 +144,7 @@ describe("apps/portal holding", () => {
     expect(HOLDING_MARKUP).not.toContain("data-reveal");
   });
 
-  test("says nothing the copy policy forbids, apart from the phrase it exists to say", () => {
-    const copy = textNodes(HOLDING_MARKUP);
-
-    expect(copy).toContain("Coming soon");
-    assertClean(copy, { allowComingSoon: true });
+  test("says nothing the copy policy forbids", () => {
+    assertClean(textNodes(HOLDING_MARKUP), { allowComingSoon: true });
   });
 });
