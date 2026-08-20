@@ -151,10 +151,10 @@
  * is not a hidden state that needs JS to come and undo it. That is the whole difference
  * between this and `Reveal`, which coming-soon.tsx documents at length.
  *
- * The idle motions (holding-drift, holding-swell, holding-halo-pulse) run at periods that
- * do not divide into each other — 19s, 27s and 31s — so the composite takes minutes to
- * repeat a pose. A single loop reads as a metronome within two cycles, and once the eye
- * finds the period the whole scene stops looking like weather.
+ * The idle motions (holding-drift, holding-swell) run at periods that do not divide into
+ * each other — 19s and 27s — so the composite takes minutes to repeat a pose. A single loop
+ * reads as a metronome within two cycles, and once the eye finds the period the whole scene
+ * stops looking like weather.
  */
 @layer utilities {
   body:has(.holding) {
@@ -176,39 +176,6 @@
 
   .holding-mark-svg {
     animation: holding-swell 27s ease-in-out 2600ms infinite;
-  }
-
-  /*
-   * A halo behind the sun, so the rise carries light and not only shape.
-   *
-   * Five stops rather than two, and they are not decoration: a straight two-stop ramp
-   * flattens to zero at a definite radius, and the eye finds that radius — it read as a
-   * grey disc with an edge rather than as light, worst at mobile widths where it covers
-   * most of the screen. The stops below approximate a gaussian falloff, which has no
-   * boundary to find. Sized against the viewport for the same reason.
-   */
-  .holding-mark::before {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 46%;
-    width: min(400px, 92vw);
-    height: min(400px, 92vw);
-    transform-origin: center;
-    translate: -50% -50%;
-    border-radius: 50%;
-    background: radial-gradient(
-      circle,
-      rgba(250, 249, 245, 0.17) 0%,
-      rgba(250, 249, 245, 0.1) 24%,
-      rgba(250, 249, 245, 0.045) 44%,
-      rgba(250, 249, 245, 0.015) 62%,
-      rgba(250, 249, 245, 0) 78%
-    );
-    pointer-events: none;
-    animation:
-      holding-halo-bloom 2600ms var(--ease-brand) 500ms both,
-      holding-halo-pulse 31s ease-in-out 3100ms infinite;
   }
 
   .holding-wordmark {
@@ -252,17 +219,6 @@
   to {
     transform: scaleX(1);
     opacity: 1;
-  }
-}
-
-@keyframes holding-halo-bloom {
-  from {
-    opacity: 0;
-    transform: scale(0.5);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -339,21 +295,6 @@
   }
 }
 
-@keyframes holding-halo-pulse {
-  0% {
-    opacity: 0.82;
-  }
-  38% {
-    opacity: 1;
-  }
-  69% {
-    opacity: 0.88;
-  }
-  100% {
-    opacity: 0.82;
-  }
-}
-
 /* Section 6 + accessibility: reduced motion collapses to near-instant, no transforms. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -396,7 +337,6 @@
    */
   .holding-sun,
   .holding-horizon,
-  .holding-mark::before,
   .holding-wordmark,
   .holding-headline,
   .holding-line,
@@ -407,9 +347,6 @@
   .holding-sun,
   .holding-horizon {
     animation-delay: 0ms !important;
-  }
-  .holding-mark::before {
-    animation-delay: 80ms !important;
   }
   .holding-wordmark {
     animation-delay: 160ms !important;

@@ -28,7 +28,7 @@ import { WaitlistForm } from "@/components/WaitlistForm";
 export default function Holding() {
   return (
     <ComingSoon
-      wordmark="Seriora Research"
+      wordmark="Seriora Research Lab"
       line="We research how agents can learn from their own experience, improve their behavior, and compound their capabilities over time."
       after={<WaitlistForm />}
     />

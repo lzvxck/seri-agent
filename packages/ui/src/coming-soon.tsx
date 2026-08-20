@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 
-import { NightField } from "./night-field";
-
 /*
  * The whole body of the holding page the three sites serve while the agent is not available:
  * one mark, one wordmark, one heading, one line, centered on a dark surface, no footer and no
@@ -26,16 +24,12 @@ import { NightField } from "./night-field";
  * prefers-reduced-motion block collapses these to 0.01ms, which with fill-mode `both` lands on
  * the end state immediately rather than leaving anything invisible.
  *
- * <NightField> is the one client component, and it is purely additive: an aria-hidden <canvas>
- * behind the text that owns no content. If it never mounts, what remains is the ink background
- * and the whole page.
- *
  * Being a plain sync server component with no "use client" has a second payoff: the app copy
  * suites can put it through `renderToStaticMarkup`, which throws outright on an async server
  * component and renders nothing for a closed client subtree.
  *
- * `min-h-[100svh]` lets the field fill the viewport instead of floating the three lines in a
- * band of ink on a tall screen.
+ * `min-h-[100svh]` lets the frame center in the viewport instead of floating the three lines in
+ * a band of ink on a tall screen.
  *
  * `after` is the one extension point: content rendered inside this same `<main>`, below the
  * centered mark/wordmark/headline block, so it shares the container's `min-h-[100svh]` and
@@ -66,48 +60,52 @@ export function ComingSoon({
       data-surface="ink"
       className="holding relative isolate flex min-h-[100svh] flex-col items-center justify-center overflow-hidden bg-ink px-11 py-29 text-center text-on-ink md:px-16 md:py-34"
     >
-      <NightField />
+      <div className="holding-frame relative z-10 w-full max-w-[640px] border border-on-ink-hairline px-8 py-16 md:px-14 md:py-18">
+        <div className="flex flex-col items-center">
+          {/*
+           * The mark is inlined rather than taken from <SerioraMark> because the sunrise needs
+           * its two paths to move independently: the sun rides up from behind the horizon, and
+           * a clipPath at y=122 hides it until it clears the line. That cut is not a new number
+           * — it is exactly where seriora-mark.tsx's own arc terminates, which is why the sun
+           * appears to emerge from the horizon rather than from an arbitrary crop.
+           */}
+          <div className="holding-mark relative mb-16">
+            <svg
+              viewBox="0 0 622 128"
+              fill="currentColor"
+              aria-hidden="true"
+              className="holding-mark-svg relative block h-auto w-[148px] text-canvas md:w-[190px]"
+            >
+              <defs>
+                <clipPath id="holding-horizon-clip">
+                  <rect x="0" y="0" width="622" height="122" />
+                </clipPath>
+              </defs>
+              <g clipPath="url(#holding-horizon-clip)">
+                <path className="holding-sun" d="M410 122A102 102 0 1 0 210 122Z" />
+              </g>
+              <path className="holding-horizon" d="M0 121Q310 115 622 121Q310 128 0 121Z" />
+            </svg>
+          </div>
 
-      <div className="relative z-10 flex flex-col items-center">
-        {/*
-         * The mark is inlined rather than taken from <SerioraMark> because the sunrise needs
-         * its two paths to move independently: the sun rides up from behind the horizon, and
-         * a clipPath at y=122 hides it until it clears the line. That cut is not a new number
-         * — it is exactly where seriora-mark.tsx's own arc terminates, which is why the sun
-         * appears to emerge from the horizon rather than from an arbitrary crop.
-         */}
-        <div className="holding-mark relative mb-20">
-          <svg
-            viewBox="0 0 622 128"
-            fill="currentColor"
-            aria-hidden="true"
-            className="holding-mark-svg relative block h-auto w-[148px] text-canvas md:w-[190px]"
-          >
-            <defs>
-              <clipPath id="holding-horizon-clip">
-                <rect x="0" y="0" width="622" height="122" />
-              </clipPath>
-            </defs>
-            <g clipPath="url(#holding-horizon-clip)">
-              <path className="holding-sun" d="M410 122A102 102 0 1 0 210 122Z" />
-            </g>
-            <path className="holding-horizon" d="M0 121Q310 115 622 121Q310 128 0 121Z" />
-          </svg>
+          <p className="holding-wordmark mb-8 font-mono text-on-ink-subtle uppercase tracking-[3px]">
+            {wordmark}
+          </p>
+          {/* Repositioned from after `line` to here: the same tuned animation (see
+              apps/lab/app/globals.css for the 2100ms + 1600ms handoff this timing feeds), just
+              narrower, so it reads as the eyebrow's underline rather than a rule closing the
+              paragraph. */}
+          <div className="holding-rule mb-11 h-px w-16" />
+          <h1 className="holding-headline max-w-[22ch] text-[30px] leading-[1.1] font-bold tracking-[-1.2px] md:text-[56px] md:tracking-[-2px]">
+            Building self improving agents for LLMs.
+          </h1>
+          <p className="holding-line mt-13 max-w-[52ch] text-on-ink-subtle md:mt-16 md:text-[16px]/[1.5]">
+            {line}
+          </p>
         </div>
 
-        <p className="holding-wordmark mb-13 font-mono text-on-ink-subtle uppercase tracking-[3px]">
-          {wordmark}
-        </p>
-        <h1 className="holding-headline max-w-[22ch] text-[30px] leading-[1.1] font-bold tracking-[-1.2px] md:text-[56px] md:tracking-[-2px]">
-          Building self improving agents for LLMs.
-        </h1>
-        <p className="holding-line mt-13 max-w-[52ch] text-on-ink-subtle md:mt-16 md:text-[16px]/[1.5]">
-          {line}
-        </p>
-        <div className="holding-rule mt-23 h-px w-[min(320px,60%)]" />
+        {after}
       </div>
-
-      {after}
     </main>
   );
 }
