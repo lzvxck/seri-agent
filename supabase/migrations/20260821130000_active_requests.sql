@@ -31,3 +31,4 @@ as $$
 $$;
 
 revoke execute on function public.claim_concurrency_slot(text, int) from anon, authenticated;
+revoke execute on function public.claim_concurrency_slot(text, int) from public;

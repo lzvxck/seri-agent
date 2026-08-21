@@ -69,3 +69,4 @@ end;
 $$;
 
 revoke execute on function public.debit_bucket(text, numeric, numeric, numeric) from anon, authenticated;
+revoke execute on function public.debit_bucket(text, numeric, numeric, numeric) from public;
