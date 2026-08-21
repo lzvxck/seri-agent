@@ -1,9 +1,4 @@
-import {
-  findCatalogEntry,
-  isZeroPriceEntry,
-  type ModelCatalog,
-  type ModelCatalogEntry,
-} from "@seri/model-catalog";
+import { isZeroPriceEntry, type ModelCatalogEntry } from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD, type Plan } from "@seri/plans";
 import type { RawUsage } from "./streamUsage";
 
@@ -40,10 +35,6 @@ export function resolvePaidDailyCap(raw: string | undefined): number {
 }
 
 export const PAID_DAILY_REQUEST_CAP = resolvePaidDailyCap(process.env.SERI_PAID_DAILY_REQUESTS);
-
-export function isZeroPriceModel(catalog: ModelCatalog, modelId: string): boolean {
-  return isZeroPriceEntry(findCatalogEntry(catalog, modelId, "openrouter"));
-}
 
 export type PreflightInput = {
   plan: Plan;

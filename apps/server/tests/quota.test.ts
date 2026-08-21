@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
+import type { ModelCatalogEntry } from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PAID_PLANS, PLAN_MONTHLY_USD } from "@seri/plans";
 import {
   costFromUsage,
   decidePreflight,
   FREE_DAILY_REQUEST_CAP,
-  isZeroPriceModel,
   PAID_DAILY_REQUEST_CAP,
   provisionalRow,
   resolveFreeDailyCap,
@@ -28,35 +27,10 @@ function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   };
 }
 
-function catalogWith(...entries: ModelCatalogEntry[]): ModelCatalog {
-  return { fetchedAt: "2026-08-17T00:00:00.000Z", entries };
-}
-
 const FREE_ENTRY = entry();
 const PRICED_ENTRY = entry({
   id: "openai/gpt-5",
   pricing: { inputPerMTok: 5, outputPerMTok: 15 },
-});
-
-describe("isZeroPriceModel", () => {
-  test("false when the entry is absent from the catalog", () => {
-    expect(isZeroPriceModel(catalogWith(), "openai/gpt-oss-120b")).toBe(false);
-  });
-
-  // pricing: undefined means "unknown", not "free" — fail closed.
-  test("false when pricing is undefined", () => {
-    const withUnknownPricing = entry({ pricing: undefined });
-    expect(isZeroPriceModel(catalogWith(withUnknownPricing), withUnknownPricing.id)).toBe(false);
-  });
-
-  test("false when input is zero but output is not", () => {
-    const mixed = entry({ pricing: { inputPerMTok: 0, outputPerMTok: 5 } });
-    expect(isZeroPriceModel(catalogWith(mixed), mixed.id)).toBe(false);
-  });
-
-  test("true when both input and output are zero", () => {
-    expect(isZeroPriceModel(catalogWith(FREE_ENTRY), FREE_ENTRY.id)).toBe(true);
-  });
 });
 
 describe("resolveFreeDailyCap", () => {
