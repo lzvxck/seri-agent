@@ -15,6 +15,17 @@ import {
 } from "../../../../../lib/entitlement";
 import { getPolarClient } from "../../../../../lib/polar";
 import { decidePreflight, provisionalRow, usageUpdate } from "../../../../../lib/quota";
+import {
+  bucketKeyFor,
+  type BucketConfig,
+  FREE_BUCKET,
+  GLOBAL_FREE_DAY_BUCKET,
+  GLOBAL_FREE_DAY_BUCKET_KEY,
+  GLOBAL_FREE_MIN_BUCKET,
+  GLOBAL_FREE_MIN_BUCKET_KEY,
+  isFreeSuffixed,
+  PAID_BUCKET,
+} from "../../../../../lib/rateLimit";
 import { createUsageTap, forwardableHeaders } from "../../../../../lib/streamUsage";
 import { getSupabaseClient } from "../../../../../lib/supabase";
 import { insertUsageEvent, updateUsageEvent } from "../../../../../lib/usageLedger";
@@ -34,6 +45,47 @@ export type RouteDeps = {
   // exactly that reason, the same seam every other real dependency here already has.
   after?: typeof afterReal;
 };
+
+// debit_bucket returns table(allowed, remaining, retry_after_seconds) — one row, or none if the
+// bucket_key lookup itself failed. No row is treated as "allowed": this is a second, additive
+// control layered in front of the quota checks above, not the last line of defense, so a rate-
+// limit-store hiccup fails open rather than 503ing every gateway request on top of it.
+async function debitBucket(
+  supabase: SupabaseClient,
+  bucketKey: string,
+  cfg: BucketConfig,
+): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds: number } | null> {
+  const { data } = await supabase.rpc("debit_bucket", {
+    p_bucket_key: bucketKey,
+    p_capacity: cfg.burst,
+    p_refill_rate: cfg.ratePerMin / 60,
+    p_cost: 1,
+  });
+  type Row = { allowed: boolean; remaining: number; retry_after_seconds: number };
+  const row = (data as Row[] | null)?.[0];
+  return row
+    ? { allowed: row.allowed, remaining: row.remaining, retryAfterSeconds: row.retry_after_seconds }
+    : null;
+}
+
+function rateLimitedResponse(
+  code: "user_rate_limited" | "global_rate_limited" | "concurrency_limit",
+  remaining: number,
+  retryAfterSeconds: number,
+): Response {
+  const retryAfter = Math.ceil(retryAfterSeconds);
+  return Response.json(
+    { code },
+    {
+      status: 429,
+      headers: {
+        "Retry-After": String(retryAfter),
+        "X-RateLimit-Remaining": String(remaining),
+        "X-RateLimit-Reset": String(Math.floor(Date.now() / 1000) + retryAfter),
+      },
+    },
+  );
+}
 
 // Next.js's build-time route-handler validator checks POST's declared signature against its
 // own expected `(request, context)` shape, not just how it's called at runtime — a second
@@ -120,118 +172,185 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     return Response.json({ code: preflight.code }, { status: preflight.status });
   }
 
-  const sessionId = request.headers.get("X-Seri-Session-Id") ?? "";
-  // Minted here, unconditionally — never trusted from the caller. A client sending the same
-  // X-Seri-Idempotency-Key on every request would otherwise collapse every usage_events row
-  // into one via the ledger's ON CONFLICT DO NOTHING, so countRequestsToday and
-  // sumSpendThisMonth would never advance past the first request — defeating both the Free
-  // daily-count cap and the paid spend cap entirely. The CLI may still send that header for its
-  // own tracing; nothing here reads it.
-  const idempotencyKey = crypto.randomUUID();
-  // models/route/provider are OpenRouter's own routing-override fields, independent of `model`
-  // — the only field preflight/decidePreflight actually checks against the catalog. Forwarded
-  // unstripped, a Free-tier request could pass preflight on a zero-price `model` and add a
-  // priced `models` fallback (or `provider`/`route` overrides) that OpenRouter honors instead,
-  // spending Seri's key on a model preflight never approved.
-  const { models: _models, route: _route, provider: _provider, ...sanitizedBody } = body;
-  const forwardBody: Record<string, unknown> = { ...sanitizedBody, session_id: sessionId };
-  if (stream) forwardBody.stream_options = { include_usage: true };
-
-  // Written before the upstream call, with zero usage/cost, so an aborted or disconnected
-  // request still counts as one attempt against the Free daily-count cap — a client that
-  // cancels mid-stream skips the TransformStream's flush() below entirely, and without this
-  // row nothing would ever record that attempt happened. The completion paths below only ever
-  // UPDATE this same row (keyed on idempotencyKey), never insert a second one. An aborted paid
-  // request keeps this row's provisional (zero) cost — full mid-stream cost tracking would need
-  // parsing token deltas as they arrive, which this does not do; only the Free-tier request
-  // count is guaranteed accurate on abort, not a paid request's exact spend.
-  // insertUsageEvent's row is the only record that this attempt happened at all — if it fails
-  // to write, countRequestsToday/sumSpendThisMonth never learn about this request, so both the
-  // Free daily cap and the paid spend cap would stop enforcing while requests keep spending
-  // Seri's OpenRouter key. Refuse rather than forward when it does.
-  const recorded = await insertUsageEvent(
+  // Cheapest/most-final-first, so a request that will be rejected on rate never claims a
+  // concurrency slot it would then have to release. Paid only ever reaches the per-user check —
+  // no global bucket (no shared OpenRouter ceiling to protect on the paid path) and no
+  // concurrency claim.
+  const userBucket = await debitBucket(
     supabase,
-    provisionalRow({ idempotencyKey, userId: identity.userId, modelId }),
+    bucketKeyFor(identity.userId, plan),
+    plan === "free" ? FREE_BUCKET : PAID_BUCKET,
   );
-  if (!recorded) {
-    return Response.json({ code: "usage_ledger_unavailable" }, { status: 503 });
+  if (userBucket && !userBucket.allowed) {
+    return rateLimitedResponse(
+      "user_rate_limited",
+      userBucket.remaining,
+      userBucket.retryAfterSeconds,
+    );
   }
 
-  // Unlike every other fallible step above, an unreachable/timed-out OpenRouter or a client
-  // disconnect (this request's own AbortSignal firing) rejects this call directly — an unhandled
-  // rejection here would 500 with no body rather than the structured response every other
-  // failure path in this function returns. The provisional row above already recorded the
-  // attempt either way.
-  let upstream: Response;
+  // Only `:free`-suffixed models share OpenRouter's account-global rate ceiling — a distinct
+  // predicate from isZeroPriceEntry (a $0-priced, non-`:free`-suffixed model does not debit this
+  // bucket at all).
+  if (plan === "free" && isFreeSuffixed(modelId)) {
+    const globalMin = await debitBucket(
+      supabase,
+      GLOBAL_FREE_MIN_BUCKET_KEY,
+      GLOBAL_FREE_MIN_BUCKET,
+    );
+    if (globalMin && !globalMin.allowed) {
+      return rateLimitedResponse(
+        "global_rate_limited",
+        globalMin.remaining,
+        globalMin.retryAfterSeconds,
+      );
+    }
+    const globalDay = await debitBucket(
+      supabase,
+      GLOBAL_FREE_DAY_BUCKET_KEY,
+      GLOBAL_FREE_DAY_BUCKET,
+    );
+    if (globalDay && !globalDay.allowed) {
+      return rateLimitedResponse(
+        "global_rate_limited",
+        globalDay.remaining,
+        globalDay.retryAfterSeconds,
+      );
+    }
+  }
+
+  // Free's max_parallel_requests=1 control. Released explicitly (in the finally block below) on
+  // every exit rather than left to claim_concurrency_slot's stale-reclaim TTL alone, so a Free
+  // user's own next request is never blocked by their just-finished one.
+  let claimedConcurrencySlot = false;
+  if (plan === "free") {
+    const { data: claimed } = await supabase.rpc("claim_concurrency_slot", {
+      p_user_id: identity.userId,
+    });
+    if (claimed === null) {
+      return rateLimitedResponse("concurrency_limit", 0, 5);
+    }
+    claimedConcurrencySlot = true;
+  }
+
   try {
-    upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.SERI_OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(forwardBody),
-      signal: request.signal,
-    });
-  } catch (error) {
-    console.error("upstream fetch failed:", error);
-    return Response.json({ code: "upstream_unreachable" }, { status: 503 });
-  }
+    const sessionId = request.headers.get("X-Seri-Session-Id") ?? "";
+    // Minted here, unconditionally — never trusted from the caller. A client sending the same
+    // X-Seri-Idempotency-Key on every request would otherwise collapse every usage_events row
+    // into one via the ledger's ON CONFLICT DO NOTHING, so countRequestsToday and
+    // sumSpendThisMonth would never advance past the first request — defeating both the Free
+    // daily-count cap and the paid spend cap entirely. The CLI may still send that header for its
+    // own tracing; nothing here reads it.
+    const idempotencyKey = crypto.randomUUID();
+    // models/route/provider are OpenRouter's own routing-override fields, independent of `model`
+    // — the only field preflight/decidePreflight actually checks against the catalog. Forwarded
+    // unstripped, a Free-tier request could pass preflight on a zero-price `model` and add a
+    // priced `models` fallback (or `provider`/`route` overrides) that OpenRouter honors instead,
+    // spending Seri's key on a model preflight never approved.
+    const { models: _models, route: _route, provider: _provider, ...sanitizedBody } = body;
+    const forwardBody: Record<string, unknown> = { ...sanitizedBody, session_id: sessionId };
+    if (stream) forwardBody.stream_options = { include_usage: true };
 
-  // A non-OK upstream response is returned to the caller as-is. The provisional row above
-  // already recorded the attempt; nothing further is written here.
-  if (!upstream.ok || !upstream.body) {
-    return new Response(upstream.body, {
+    // Written before the upstream call, with zero usage/cost, so an aborted or disconnected
+    // request still counts as one attempt against the Free daily-count cap — a client that
+    // cancels mid-stream skips the TransformStream's flush() below entirely, and without this
+    // row nothing would ever record that attempt happened. The completion paths below only ever
+    // UPDATE this same row (keyed on idempotencyKey), never insert a second one. An aborted paid
+    // request keeps this row's provisional (zero) cost — full mid-stream cost tracking would need
+    // parsing token deltas as they arrive, which this does not do; only the Free-tier request
+    // count is guaranteed accurate on abort, not a paid request's exact spend.
+    // insertUsageEvent's row is the only record that this attempt happened at all — if it fails
+    // to write, countRequestsToday/sumSpendThisMonth never learn about this request, so both the
+    // Free daily cap and the paid spend cap would stop enforcing while requests keep spending
+    // Seri's OpenRouter key. Refuse rather than forward when it does.
+    const recorded = await insertUsageEvent(
+      supabase,
+      provisionalRow({ idempotencyKey, userId: identity.userId, modelId }),
+    );
+    if (!recorded) {
+      return Response.json({ code: "usage_ledger_unavailable" }, { status: 503 });
+    }
+
+    // Unlike every other fallible step above, an unreachable/timed-out OpenRouter or a client
+    // disconnect (this request's own AbortSignal firing) rejects this call directly — an unhandled
+    // rejection here would 500 with no body rather than the structured response every other
+    // failure path in this function returns. The provisional row above already recorded the
+    // attempt either way.
+    let upstream: Response;
+    try {
+      upstream = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.SERI_OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(forwardBody),
+        signal: request.signal,
+      });
+    } catch (error) {
+      console.error("upstream fetch failed:", error);
+      return Response.json({ code: "upstream_unreachable" }, { status: 503 });
+    }
+
+    // A non-OK upstream response is returned to the caller as-is. The provisional row above
+    // already recorded the attempt; nothing further is written here.
+    if (!upstream.ok || !upstream.body) {
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: forwardableHeaders(upstream.headers),
+      });
+    }
+
+    const requestId = upstream.headers.get("x-request-id");
+
+    if (stream) {
+      const usageTap = createUsageTap((usage) => {
+        // Scheduled via after(), not just `void`d: this deploys as a Vercel serverless function
+        // (apps/server/vercel.json), which can freeze/tear down the invocation as soon as the
+        // response body is fully flushed to the caller — a bare `void` update racing that teardown
+        // could be killed mid-write, permanently leaving this row at its provisional cost_usd: 0
+        // and silently undercounting a paid user's spend. after() keeps the invocation alive until
+        // this callback settles. A ledger write failure inside it must still not be able to affect
+        // the response, which has already streamed by the time flush() runs — updateUsageEvent
+        // itself never throws, only logs.
+        after(() => updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId)));
+      });
+      return new Response(upstream.body.pipeThrough(usageTap), {
+        status: upstream.status,
+        headers: forwardableHeaders(upstream.headers),
+      });
+    }
+
+    // Read as text first: an OK upstream response with a non-JSON body would otherwise reject
+    // upstream.json() directly, 500ing with no body instead of the passthrough below. The
+    // provisional row's cost stays at zero either way here — there is no usage payload to update
+    // it with when the body isn't JSON — but the caller now gets OpenRouter's real body/status
+    // instead of an opaque crash.
+    const text = await upstream.text();
+    let json: { usage?: unknown };
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return new Response(text, {
+        status: upstream.status,
+        headers: forwardableHeaders(upstream.headers),
+      });
+    }
+    // Scheduled via after(), same as the streaming path above and for the same reason: awaiting it
+    // here would delay the response for no benefit, but a bare `void` risks the Vercel invocation
+    // being torn down before this write lands.
+    after(() =>
+      updateUsageEvent(supabase, idempotencyKey, usageUpdate(json.usage, entry, requestId)),
+    );
+    return Response.json(json, {
       status: upstream.status,
       headers: forwardableHeaders(upstream.headers),
     });
+  } finally {
+    if (claimedConcurrencySlot) {
+      await supabase.from("active_requests").delete().eq("workos_user_id", identity.userId);
+    }
   }
-
-  const requestId = upstream.headers.get("x-request-id");
-
-  if (stream) {
-    const usageTap = createUsageTap((usage) => {
-      // Scheduled via after(), not just `void`d: this deploys as a Vercel serverless function
-      // (apps/server/vercel.json), which can freeze/tear down the invocation as soon as the
-      // response body is fully flushed to the caller — a bare `void` update racing that teardown
-      // could be killed mid-write, permanently leaving this row at its provisional cost_usd: 0
-      // and silently undercounting a paid user's spend. after() keeps the invocation alive until
-      // this callback settles. A ledger write failure inside it must still not be able to affect
-      // the response, which has already streamed by the time flush() runs — updateUsageEvent
-      // itself never throws, only logs.
-      after(() => updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId)));
-    });
-    return new Response(upstream.body.pipeThrough(usageTap), {
-      status: upstream.status,
-      headers: forwardableHeaders(upstream.headers),
-    });
-  }
-
-  // Read as text first: an OK upstream response with a non-JSON body would otherwise reject
-  // upstream.json() directly, 500ing with no body instead of the passthrough below. The
-  // provisional row's cost stays at zero either way here — there is no usage payload to update
-  // it with when the body isn't JSON — but the caller now gets OpenRouter's real body/status
-  // instead of an opaque crash.
-  const text = await upstream.text();
-  let json: { usage?: unknown };
-  try {
-    json = JSON.parse(text);
-  } catch {
-    return new Response(text, {
-      status: upstream.status,
-      headers: forwardableHeaders(upstream.headers),
-    });
-  }
-  // Scheduled via after(), same as the streaming path above and for the same reason: awaiting it
-  // here would delay the response for no benefit, but a bare `void` risks the Vercel invocation
-  // being torn down before this write lands.
-  after(() =>
-    updateUsageEvent(supabase, idempotencyKey, usageUpdate(json.usage, entry, requestId)),
-  );
-  return Response.json(json, {
-    status: upstream.status,
-    headers: forwardableHeaders(upstream.headers),
-  });
 }
 
 export const POST = (request: Request): Promise<Response> => handlePost(request);
