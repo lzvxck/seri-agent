@@ -5,7 +5,7 @@ the approved plan at `.claude/loops/gateway-rate-limiting-impl/feature-plan.md`.
 conventional commit per step.
 
 - [x] 1. `feat(db): add rate_buckets table and debit_bucket RPC`
-- [ ] 2. `feat(db): add active_requests table and claim_concurrency_slot RPC`
+- [x] 2. `feat(db): add active_requests table and claim_concurrency_slot RPC`
 - [ ] 3. `feat(server): add rateLimit config module`
 - [ ] 4. `test(server): add rateLimit unit tests`
 - [ ] 5. `test(server): extend gatewayRoute fake supabase client for rpc and active_requests`
