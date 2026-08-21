@@ -69,7 +69,6 @@ function fakeUsageSupabaseTracking(
       name: string,
       args: Record<string, unknown>,
     ) => { data: unknown; error: unknown } | undefined;
-    activeRequestsDeleteError?: unknown;
   } = {},
 ) {
   const upserts: Record<string, unknown>[] = [];
@@ -87,9 +86,6 @@ function fakeUsageSupabaseTracking(
           delete: () => ({
             eq: (_column: string, value: string) => {
               activeRequestsDeletes.push(value);
-              if (opts.activeRequestsDeleteError) {
-                return Promise.resolve({ data: null, error: opts.activeRequestsDeleteError });
-              }
               return Promise.resolve({ data: null, error: null });
             },
           }),
@@ -907,6 +903,34 @@ describe("handlePost — rate limiting", () => {
 
     expect(response.status).toBe(429);
     expect(await response.json()).toEqual({ code: "concurrency_limit" });
+  });
+
+  // claim_concurrency_slot is a second, additive control (same posture as debit_bucket) — an
+  // RPC-level error (network blip, function not yet deployed) must fail open, not be treated
+  // identically to "another request is genuinely in flight" (data: null, error: null).
+  test("a claim_concurrency_slot RPC error fails open instead of returning 429 concurrency_limit", async () => {
+    const fetchFn = (async () => completedNonStreamResponse()) as unknown as typeof fetch;
+    const { client: supabase, activeRequestsDeletes } = fakeUsageSupabaseTracking({
+      count: 0,
+      rpc: (name) =>
+        name === "claim_concurrency_slot"
+          ? { data: null, error: { message: "rpc unavailable" } }
+          : undefined,
+    });
+
+    const response = await withCatalogEntry("stealth/ox-alpha", () =>
+      handlePost(gatewayRequest({ model: "stealth/ox-alpha" }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+        fetchFn,
+        after: fakeAfter,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    // No slot was actually claimed (the insert may never have run), so nothing is released either.
+    expect(activeRequestsDeletes).toHaveLength(0);
   });
 
   // Asserts ORDER, not just occurrence: a release that fired at handlePost's return (TTFB)

@@ -55,12 +55,15 @@ async function debitBucket(
   bucketKey: string,
   cfg: BucketConfig,
 ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds: number } | null> {
-  const { data } = await supabase.rpc("debit_bucket", {
+  const { data, error } = await supabase.rpc("debit_bucket", {
     p_bucket_key: bucketKey,
     p_capacity: cfg.burst,
     p_refill_rate: cfg.ratePerMin / 60,
     p_cost: 1,
   });
+  if (error) {
+    console.error("debit_bucket failed:", error);
+  }
   type Row = { allowed: boolean; remaining: number; retry_after_seconds: number };
   const row = (data as Row[] | null)?.[0];
   return row
@@ -263,13 +266,18 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // alone, so a Free user's own next request is never blocked by their just-finished one.
   let claimedConcurrencySlot = false;
   if (plan === "free") {
-    const { data: claimed } = await supabase.rpc("claim_concurrency_slot", {
+    const { data: claimed, error: claimError } = await supabase.rpc("claim_concurrency_slot", {
       p_user_id: identity.userId,
     });
-    if (claimed === null) {
+    if (claimError) {
+      // Same fail-open posture as debitBucket: this is a second, additive control, not the last
+      // line of defense — an RPC hiccup should not 429 every Free request.
+      console.error("claim_concurrency_slot failed:", claimError);
+    } else if (claimed === null) {
       return rateLimitedResponse("concurrency_limit", 0, 5);
+    } else {
+      claimedConcurrencySlot = true;
     }
-    claimedConcurrencySlot = true;
   }
 
   try {
