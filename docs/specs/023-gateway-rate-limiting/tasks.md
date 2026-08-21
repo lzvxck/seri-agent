@@ -11,4 +11,4 @@ conventional commit per step.
 - [x] 5. `test(server): extend gatewayRoute fake supabase client for rpc and active_requests`
 - [x] 6. `feat(server): integrate rate limiting into gateway route`
 - [x] 7. `test(server): add gateway route rate-limit cases`
-- [ ] 8. `test(server): add rate bucket integration tests`
+- [x] 8. `test(server): add rate bucket integration tests`
