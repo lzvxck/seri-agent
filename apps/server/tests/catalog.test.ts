@@ -17,7 +17,7 @@ describe("getModelCatalog", () => {
     globalThis.fetch = originalFetch;
   });
 
-  // The fix: EMPTY_MANIFEST is deliberately unusable (every Free-tier isZeroPriceModel check
+  // The fix: EMPTY_MANIFEST is deliberately unusable (every Free-tier isZeroPriceEntry check
   // fails against it), so — unlike a caller with a real, complete fallback — this must NOT be
   // cached for the process lifetime. Without resetCatalogCache() here, one transient
   // models.dev failure would 402 model_not_in_free_tier for every Free request for the rest of

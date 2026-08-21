@@ -115,7 +115,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     console.error("usage query failed:", error);
     return Response.json({ code: "usage_query_error" }, { status: 503 });
   }
-  const preflight = decidePreflight({ plan, modelId, catalog, requestsToday, spendUsd });
+  const preflight = decidePreflight({ plan, entry, requestsToday, spendUsd });
   if (!preflight.allow) {
     return Response.json({ code: preflight.code }, { status: preflight.status });
   }

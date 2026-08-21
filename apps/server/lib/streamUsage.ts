@@ -36,14 +36,25 @@ export function createUsageTap(
   onUsage: (usage: unknown) => void,
 ): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
-  let tail = "";
+  // Concatenating + re-slicing on every chunk is O(buffered length) work per chunk for an
+  // O(TAIL_BYTES) result — buffered here and only collapsed once the backlog grows to twice
+  // what's needed, so a stream of many small chunks doesn't pay that cost on each one.
+  let chunks: string[] = [];
+  let length = 0;
   return new TransformStream({
     transform(chunk, controller) {
       controller.enqueue(chunk);
-      tail = (tail + decoder.decode(chunk, { stream: true })).slice(-TAIL_BYTES);
+      const decoded = decoder.decode(chunk, { stream: true });
+      chunks.push(decoded);
+      length += decoded.length;
+      if (length > TAIL_BYTES * 2) {
+        const trimmed = chunks.join("").slice(-TAIL_BYTES);
+        chunks = [trimmed];
+        length = trimmed.length;
+      }
     },
     flush() {
-      const usage = parseFinalUsage(tail);
+      const usage = parseFinalUsage(chunks.join("").slice(-TAIL_BYTES));
       if (usage !== undefined) onUsage(usage);
     },
   });

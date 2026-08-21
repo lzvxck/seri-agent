@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
+import type { ModelCatalogEntry } from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PAID_PLANS, PLAN_MONTHLY_USD } from "@seri/plans";
 import {
   costFromUsage,
   decidePreflight,
   FREE_DAILY_REQUEST_CAP,
-  isZeroPriceModel,
   PAID_DAILY_REQUEST_CAP,
   provisionalRow,
   resolveFreeDailyCap,
@@ -28,35 +27,10 @@ function entry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   };
 }
 
-function catalogWith(...entries: ModelCatalogEntry[]): ModelCatalog {
-  return { fetchedAt: "2026-08-17T00:00:00.000Z", entries };
-}
-
 const FREE_ENTRY = entry();
 const PRICED_ENTRY = entry({
   id: "openai/gpt-5",
   pricing: { inputPerMTok: 5, outputPerMTok: 15 },
-});
-
-describe("isZeroPriceModel", () => {
-  test("false when the entry is absent from the catalog", () => {
-    expect(isZeroPriceModel(catalogWith(), "openai/gpt-oss-120b")).toBe(false);
-  });
-
-  // pricing: undefined means "unknown", not "free" — fail closed.
-  test("false when pricing is undefined", () => {
-    const withUnknownPricing = entry({ pricing: undefined });
-    expect(isZeroPriceModel(catalogWith(withUnknownPricing), withUnknownPricing.id)).toBe(false);
-  });
-
-  test("false when input is zero but output is not", () => {
-    const mixed = entry({ pricing: { inputPerMTok: 0, outputPerMTok: 5 } });
-    expect(isZeroPriceModel(catalogWith(mixed), mixed.id)).toBe(false);
-  });
-
-  test("true when both input and output are zero", () => {
-    expect(isZeroPriceModel(catalogWith(FREE_ENTRY), FREE_ENTRY.id)).toBe(true);
-  });
 });
 
 describe("resolveFreeDailyCap", () => {
@@ -108,14 +82,11 @@ describe("resolvePaidDailyCap", () => {
 });
 
 describe("decidePreflight — free plan", () => {
-  const catalog = catalogWith(FREE_ENTRY, PRICED_ENTRY);
-
   test("allows one request under the daily cap", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: FREE_DAILY_REQUEST_CAP - 1,
         spendUsd: 0,
       }),
@@ -126,8 +97,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: FREE_DAILY_REQUEST_CAP,
         spendUsd: 0,
       }),
@@ -138,8 +108,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: FREE_DAILY_REQUEST_CAP + 1,
         spendUsd: 0,
       }),
@@ -150,8 +119,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: 0,
         spendUsd: 0,
       }),
@@ -162,8 +130,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: 0,
       }),
@@ -175,8 +142,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: 0,
       }).allow,
@@ -187,8 +153,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: FREE_DAILY_REQUEST_CAP,
         spendUsd: 0,
       }).allow,
@@ -201,8 +166,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: 0,
         spendUsd: 1_000_000,
       }),
@@ -211,16 +175,13 @@ describe("decidePreflight — free plan", () => {
 });
 
 describe("decidePreflight — paid plans", () => {
-  const catalog = catalogWith(FREE_ENTRY, PRICED_ENTRY);
-
   test.each([...PAID_PLANS])("%s: refuses at the included-spend threshold", (plan) => {
     const allowance = PLAN_MONTHLY_USD[plan] * INCLUDED_SPEND_RATIO;
 
     expect(
       decidePreflight({
         plan,
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: allowance,
       }),
@@ -233,8 +194,7 @@ describe("decidePreflight — paid plans", () => {
     expect(
       decidePreflight({
         plan,
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: allowance - 0.01,
       }),
@@ -249,8 +209,7 @@ describe("decidePreflight — paid plans", () => {
     expect(
       decidePreflight({
         plan: "pro",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: PAID_DAILY_REQUEST_CAP,
         spendUsd: 0,
       }),
@@ -261,8 +220,7 @@ describe("decidePreflight — paid plans", () => {
     expect(
       decidePreflight({
         plan: "pro",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: PAID_DAILY_REQUEST_CAP - 1,
         spendUsd: 0,
       }),
@@ -277,8 +235,7 @@ describe("decidePreflight — paid plans", () => {
     expect(
       decidePreflight({
         plan: "pro",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: allowance,
       }),

@@ -1,9 +1,4 @@
-import {
-  findCatalogEntry,
-  isZeroPriceEntry,
-  type ModelCatalog,
-  type ModelCatalogEntry,
-} from "@seri/model-catalog";
+import { isZeroPriceEntry, type ModelCatalogEntry } from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD, type Plan } from "@seri/plans";
 import type { RawUsage } from "./streamUsage";
 
@@ -41,14 +36,9 @@ export function resolvePaidDailyCap(raw: string | undefined): number {
 
 export const PAID_DAILY_REQUEST_CAP = resolvePaidDailyCap(process.env.SERI_PAID_DAILY_REQUESTS);
 
-export function isZeroPriceModel(catalog: ModelCatalog, modelId: string): boolean {
-  return isZeroPriceEntry(findCatalogEntry(catalog, modelId, "openrouter"));
-}
-
 export type PreflightInput = {
   plan: Plan;
-  modelId: string;
-  catalog: ModelCatalog;
+  entry: ModelCatalogEntry | undefined;
   requestsToday: number;
   spendUsd: number; // paid only
 };
@@ -71,7 +61,7 @@ export function decidePreflight(input: PreflightInput): PreflightDecision {
     if (input.requestsToday >= FREE_DAILY_REQUEST_CAP) {
       return { allow: false, status: 402, code: "free_daily_cap" };
     }
-    if (!isZeroPriceModel(input.catalog, input.modelId)) {
+    if (!isZeroPriceEntry(input.entry)) {
       return { allow: false, status: 402, code: "model_not_in_free_tier" };
     }
     return { allow: true };
