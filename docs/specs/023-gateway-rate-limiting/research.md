@@ -201,6 +201,11 @@ create or replace function public.debit_bucket(
 returns table(allowed boolean, remaining numeric, retry_after_seconds numeric)
 language plpgsql
 as $$
+declare
+  v_tokens     numeric;
+  v_updated_at timestamptz;
+  v_available  numeric;
+  v_allowed    boolean;
 begin
   -- Lazily initialize a full bucket on first use. ON CONFLICT DO NOTHING makes this safe under
   -- concurrent first-callers — same "the constraint is the barrier" idiom as provisioning_claims,
@@ -209,43 +214,45 @@ begin
   values (p_bucket_key, p_capacity, clock_timestamp())
   on conflict (bucket_key) do nothing;
 
+  select tokens, updated_at into v_tokens, v_updated_at
+  from public.rate_buckets
+  where bucket_key = p_bucket_key
+  for update;
+
+  v_available := least(p_capacity, v_tokens + p_refill_rate * extract(epoch from (clock_timestamp() - v_updated_at)));
+  v_allowed := v_available >= p_cost;
+
+  update public.rate_buckets
+  set
+    tokens     = case when v_allowed then v_available - p_cost else v_available end,
+    updated_at = clock_timestamp()
+  where bucket_key = p_bucket_key;
+
   return query
-  with refilled as (
-    select
-      bucket_key,
-      least(p_capacity, tokens + p_refill_rate * extract(epoch from (clock_timestamp() - updated_at))) as available
-    from public.rate_buckets
-    where bucket_key = p_bucket_key
-  ),
-  debited as (
-    update public.rate_buckets b
-    set
-      tokens     = case when r.available >= p_cost then r.available - p_cost else r.available end,
-      updated_at = clock_timestamp()
-    from refilled r
-    where b.bucket_key = r.bucket_key
-    returning b.tokens, (r.available >= p_cost) as was_allowed, r.available
-  )
   select
-    was_allowed,
-    tokens,
-    case when was_allowed then 0::numeric
-         else greatest(0, (p_cost - available)) / nullif(p_refill_rate, 0)
-    end
-  from debited;
+    v_allowed,
+    case when v_allowed then v_available - p_cost else v_available end,
+    case when v_allowed then 0::numeric
+         else greatest(0, (p_cost - v_available)) / nullif(p_refill_rate, 0)
+    end;
 end;
 $$;
 ```
 
-Why this is atomic without an explicit `SELECT ... FOR UPDATE`: the `UPDATE ... FROM refilled`
-statement takes the target row's write lock as part of executing the single statement; a second
-concurrent caller targeting the same `bucket_key` blocks on that row lock until the first
-statement commits, then re-evaluates `refilled` against the now-committed `tokens`/`updated_at`.
-This is the same one-statement-is-the-barrier property `debit_bucket`'s design note in
-environment-research.md already sketched (`UPDATE ... SET tokens = least(...) - cost ...
-RETURNING`), refined here into a CTE so `RETURNING` can report the *pre-write* availability
-decision (`was_allowed`) alongside the *post-write* token count, which a bare `UPDATE ...
-RETURNING` cannot do in one pass without either two statements or this CTE split.
+Why this is atomic: `SELECT ... FOR UPDATE` takes the target row's write lock before the refill
+is computed, so a second concurrent caller targeting the same `bucket_key` blocks on that row
+lock until the first invocation's `UPDATE` commits, then re-reads the now-committed
+`tokens`/`updated_at` itself when it resumes. **An earlier version of this design computed the
+refill in a plain `SELECT` inside a CTE (`with refilled as (select ...) update ... from
+refilled`) with no explicit `FOR UPDATE`, reasoning that the `UPDATE`'s own row lock was enough
+— it is not:** the CTE's `SELECT` is materialized once, from the snapshot visible before the
+lock is acquired, and under READ COMMITTED a second caller blocked on that row's lock re-checks
+only the `UPDATE`'s join qual once the lock releases, not the CTE's `SELECT` — so both callers
+can compute `available` from the same stale, pre-debit balance and both be allowed past a
+capacity the bucket cannot actually afford. Locking the row explicitly with `FOR UPDATE` before
+computing the refill closes that gap: the second caller's own `SELECT ... FOR UPDATE` cannot
+proceed until the first caller's transaction (insert/select/update, all inside one function
+call) commits, so it always refills from the row the first caller actually left behind.
 
 Called from `apps/server` as:
 ```ts

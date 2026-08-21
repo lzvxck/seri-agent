@@ -10,13 +10,17 @@ create table public.rate_buckets (
 alter table public.rate_buckets enable row level security;
 revoke all on public.rate_buckets from anon, authenticated;
 
--- Atomic read-refill-compare-write in one statement: the UPDATE ... FROM refilled statement
--- takes the target row's write lock as part of executing, so a second concurrent caller
--- targeting the same bucket_key blocks on that row lock until the first statement commits,
--- then re-evaluates refilled against the now-committed tokens/updated_at. The first plpgsql
--- function in this repo — the codebase's usual "insert ... on conflict do nothing" barrier
--- idiom (provisioning_claims, usage_events) cannot express this read-refill-compare-write in
--- one step.
+-- Atomic read-refill-compare-write: SELECT ... FOR UPDATE takes the target row's write lock
+-- before the refill is computed, so a second concurrent caller targeting the same bucket_key
+-- blocks on that row lock until the first invocation's UPDATE commits, then re-reads the
+-- now-committed tokens/updated_at itself. A CTE built from a plain SELECT (no FOR UPDATE) is
+-- materialized once against the pre-lock snapshot — under READ COMMITTED, a blocked concurrent
+-- UPDATE re-runs only its join qual against the already-materialized CTE row when the lock
+-- releases, not the CTE's own SELECT, so two callers could both compute `available` from the
+-- same stale balance and both be allowed past a capacity the bucket cannot actually afford. The
+-- first plpgsql function in this repo — the codebase's usual "insert ... on conflict do nothing"
+-- barrier idiom (provisioning_claims, usage_events) cannot express this read-refill-compare-write
+-- in one step.
 create or replace function public.debit_bucket(
   p_bucket_key   text,
   p_capacity     numeric,
@@ -26,6 +30,11 @@ create or replace function public.debit_bucket(
 returns table(allowed boolean, remaining numeric, retry_after_seconds numeric)
 language plpgsql
 as $$
+declare
+  v_tokens     numeric;
+  v_updated_at timestamptz;
+  v_available  numeric;
+  v_allowed    boolean;
 begin
   -- Lazily initialize a full bucket on first use. ON CONFLICT DO NOTHING makes this safe under
   -- concurrent first-callers — same "the constraint is the barrier" idiom as provisioning_claims,
@@ -34,29 +43,26 @@ begin
   values (p_bucket_key, p_capacity, clock_timestamp())
   on conflict (bucket_key) do nothing;
 
+  select tokens, updated_at into v_tokens, v_updated_at
+  from public.rate_buckets
+  where bucket_key = p_bucket_key
+  for update;
+
+  v_available := least(p_capacity, v_tokens + p_refill_rate * extract(epoch from (clock_timestamp() - v_updated_at)));
+  v_allowed := v_available >= p_cost;
+
+  update public.rate_buckets
+  set
+    tokens     = case when v_allowed then v_available - p_cost else v_available end,
+    updated_at = clock_timestamp()
+  where bucket_key = p_bucket_key;
+
   return query
-  with refilled as (
-    select
-      bucket_key,
-      least(p_capacity, tokens + p_refill_rate * extract(epoch from (clock_timestamp() - updated_at))) as available
-    from public.rate_buckets
-    where bucket_key = p_bucket_key
-  ),
-  debited as (
-    update public.rate_buckets b
-    set
-      tokens     = case when r.available >= p_cost then r.available - p_cost else r.available end,
-      updated_at = clock_timestamp()
-    from refilled r
-    where b.bucket_key = r.bucket_key
-    returning b.tokens, (r.available >= p_cost) as was_allowed, r.available
-  )
   select
-    was_allowed,
-    tokens,
-    case when was_allowed then 0::numeric
-         else greatest(0, (p_cost - available)) / nullif(p_refill_rate, 0)
-    end
-  from debited;
+    v_allowed,
+    case when v_allowed then v_available - p_cost else v_available end,
+    case when v_allowed then 0::numeric
+         else greatest(0, (p_cost - v_available)) / nullif(p_refill_rate, 0)
+    end;
 end;
 $$;
