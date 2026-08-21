@@ -7,7 +7,7 @@ conventional commit per step.
 - [x] 1. `feat(db): add rate_buckets table and debit_bucket RPC`
 - [x] 2. `feat(db): add active_requests table and claim_concurrency_slot RPC`
 - [x] 3. `feat(server): add rateLimit config module`
-- [ ] 4. `test(server): add rateLimit unit tests`
+- [x] 4. `test(server): add rateLimit unit tests`
 - [ ] 5. `test(server): extend gatewayRoute fake supabase client for rpc and active_requests`
 - [ ] 6. `feat(server): integrate rate limiting into gateway route`
 - [ ] 7. `test(server): add gateway route rate-limit cases`
