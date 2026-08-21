@@ -92,8 +92,8 @@ function releaseOnStreamDrain(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          controller.close();
           await releaseOnce();
+          controller.close();
           return;
         }
         controller.enqueue(value);
