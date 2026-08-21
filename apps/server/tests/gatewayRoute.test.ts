@@ -811,6 +811,30 @@ describe("handlePost — rate limiting", () => {
     expect(rpcCalls.filter((call) => call.name === "debit_bucket")).toHaveLength(1);
   });
 
+  // debit_bucket's retry_after_seconds is NULL when refill_rate is 0 (division by
+  // nullif(p_refill_rate, 0)) — Math.ceil(null) is 0, which would send a busy-loop-inviting
+  // `Retry-After: 0` without the clamp.
+  test("a null retry_after_seconds clamps Retry-After to 1, not 0", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase } = fakeUsageSupabaseTracking({
+      costRows: [],
+      rpc: (name) =>
+        name === "debit_bucket"
+          ? { data: [{ allowed: false, remaining: 0, retry_after_seconds: null }], error: null }
+          : undefined,
+    });
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("1");
+  });
+
   test("a Free request on a `:free`-suffixed model whose global per-minute bucket refuses returns 429 global_rate_limited", async () => {
     const fetchFn = neverFetch();
     const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({

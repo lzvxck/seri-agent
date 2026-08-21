@@ -114,7 +114,11 @@ function rateLimitedResponse(
   remaining: number,
   retryAfterSeconds: number,
 ): Response {
-  const retryAfter = Math.ceil(retryAfterSeconds);
+  // retryAfterSeconds is NULL (division by nullif(p_refill_rate, 0)) when a bucket's refill_rate
+  // is 0 — Math.ceil(null) is 0, which would otherwise send a busy-loop-inviting `Retry-After: 0`
+  // instead of a sane backoff hint.
+  const computed = Math.ceil(retryAfterSeconds);
+  const retryAfter = Number.isFinite(computed) && computed > 0 ? computed : 1;
   return Response.json(
     { code },
     {
