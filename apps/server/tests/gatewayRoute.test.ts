@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
+import { resetCatalogCache } from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD } from "@seri/plans";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { after as afterReal } from "next/server";
@@ -142,6 +143,45 @@ function fakeUsageSupabaseTracking(
 const fakeAfter: typeof afterReal = (task) => {
   void (typeof task === "function" ? task() : task);
 };
+
+// getModelCatalog() has no injectable seam on RouteDeps — only the OpenRouter upstream call's
+// fetchFn is — so a Free-tier rate-limit test that needs decidePreflight to actually pass (a
+// real, zero-priced catalog entry) has to drive the same real fetch-and-cache path
+// catalog.test.ts's own tests already do: override globalThis.fetch with a minimal models.dev-
+// shaped response, clear the process-lifetime cache, and restore both afterward.
+async function withCatalogEntry<T>(modelId: string, fn: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  const originalDisableFlag = process.env.SERI_DISABLE_MODELS_FETCH;
+  delete process.env.SERI_DISABLE_MODELS_FETCH;
+  resetCatalogCache();
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        openrouter: {
+          models: {
+            [modelId]: {
+              id: modelId,
+              name: modelId,
+              family: null,
+              tool_call: true,
+              reasoning: false,
+              limit: { context: 1000, output: 1000 },
+              cost: { input: 0, output: 0 },
+            },
+          },
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )) as unknown as typeof fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalDisableFlag === undefined) delete process.env.SERI_DISABLE_MODELS_FETCH;
+    else process.env.SERI_DISABLE_MODELS_FETCH = originalDisableFlag;
+    resetCatalogCache();
+  }
+}
 
 function neverFetch(): typeof fetch {
   return (async () => {
@@ -746,5 +786,177 @@ describe("handlePost — a normal completion updates the same row the provisiona
     expect(updates[0]?.row.input_tokens).toBe(10);
     expect(updates[0]?.row.output_tokens).toBe(5);
     expect(updates[0]?.row.cost_usd).toBe(0.002);
+  });
+});
+
+describe("handlePost — rate limiting", () => {
+  // A paid plan reaches the per-user bucket check without needing a real catalog entry —
+  // decidePreflight's isZeroPriceEntry check only applies to Free.
+  test("the per-user bucket refusing returns 429 user_rate_limited with Retry-After, without calling upstream", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({
+      costRows: [],
+      rpc: (name) =>
+        name === "debit_bucket"
+          ? { data: [{ allowed: false, remaining: 0, retry_after_seconds: 12 }], error: null }
+          : undefined,
+    });
+
+    const response = await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+    });
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ code: "user_rate_limited" });
+    expect(response.headers.get("Retry-After")).toBe("12");
+    expect(rpcCalls.filter((call) => call.name === "debit_bucket")).toHaveLength(1);
+  });
+
+  test("a Free request on a `:free`-suffixed model whose global per-minute bucket refuses returns 429 global_rate_limited", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({
+      count: 0,
+      rpc: (name, args) => {
+        if (name !== "debit_bucket" || args.p_bucket_key !== "global:free:min") return undefined;
+        return { data: [{ allowed: false, remaining: 0, retry_after_seconds: 3 }], error: null };
+      },
+    });
+
+    const response = await withCatalogEntry("openai/gpt-oss-120b:free", () =>
+      handlePost(gatewayRequest({ model: "openai/gpt-oss-120b:free" }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+        fetchFn,
+      }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ code: "global_rate_limited" });
+    expect(rpcCalls.some((call) => call.name === "claim_concurrency_slot")).toBe(false);
+  });
+
+  // stealth/ox-alpha-shaped: $0-priced but not `:free`-suffixed. Documents the current
+  // conservative scope decision (isFreeSuffixed, not isZeroPriceEntry, gates the global bucket)
+  // as a checkable behavior — the request still succeeds normally.
+  test("a Free request on a $0-priced, non-`:free`-suffixed model never calls the global bucket RPC", async () => {
+    const fetchFn = (async () => completedNonStreamResponse()) as unknown as typeof fetch;
+    const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({ count: 0 });
+
+    const response = await withCatalogEntry("stealth/ox-alpha", () =>
+      handlePost(gatewayRequest({ model: "stealth/ox-alpha" }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+        fetchFn,
+        after: fakeAfter,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(
+      rpcCalls.some(
+        (call) =>
+          call.name === "debit_bucket" &&
+          (call.args.p_bucket_key === "global:free:min" ||
+            call.args.p_bucket_key === "global:free:day"),
+      ),
+    ).toBe(false);
+  });
+
+  test("a paid request only calls the per-user paid bucket RPC — never the global or concurrency RPCs", async () => {
+    const fetchFn = (async () => completedNonStreamResponse()) as unknown as typeof fetch;
+    const { client: supabase, rpcCalls, activeRequestsDeletes } = fakeUsageSupabaseTracking({
+      costRows: [],
+    });
+
+    await handlePost(gatewayRequest({ model: "m" }), {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+      fetchFn,
+      after: fakeAfter,
+    });
+
+    expect(rpcCalls).toEqual([
+      { name: "debit_bucket", args: expect.objectContaining({ p_bucket_key: "user:user_1:paid" }) },
+    ]);
+    expect(activeRequestsDeletes).toHaveLength(0);
+  });
+
+  // Not `:free`-suffixed, so only the per-user bucket and the concurrency claim apply here —
+  // isolating the concurrency check from the global-bucket checks above.
+  test("the concurrency claim refusing returns 429 concurrency_limit", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase } = fakeUsageSupabaseTracking({
+      count: 0,
+      rpc: (name) => (name === "claim_concurrency_slot" ? { data: null, error: null } : undefined),
+    });
+
+    const response = await withCatalogEntry("stealth/ox-alpha", () =>
+      handlePost(gatewayRequest({ model: "stealth/ox-alpha" }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+        fetchFn,
+      }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ code: "concurrency_limit" });
+  });
+
+  test("a successful Free streaming request releases its concurrency claim after completion", async () => {
+    const sseBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{}}]}\n\n'));
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const fetchFn = (async () =>
+      new Response(sseBody, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      })) as unknown as typeof fetch;
+    const { client: supabase, activeRequestsDeletes } = fakeUsageSupabaseTracking({ count: 0 });
+
+    const response = await withCatalogEntry("stealth/ox-alpha", () =>
+      handlePost(gatewayRequest({ model: "stealth/ox-alpha", stream: true }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+        fetchFn,
+      }),
+    );
+    await response.text();
+
+    expect(activeRequestsDeletes).toEqual(["user_1"]);
+  });
+
+  // Proves the finally block fires on an early-503 exit too, not only on a normal completion —
+  // usage_ledger_unavailable is returned from inside the wrapped try block, after the claim.
+  test("a usage-ledger write failure still releases the concurrency claim", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase, activeRequestsDeletes } = fakeUsageSupabaseTracking({
+      count: 0,
+      upsertError: { message: "insert failed" },
+    });
+
+    const response = await withCatalogEntry("stealth/ox-alpha", () =>
+      handlePost(gatewayRequest({ model: "stealth/ox-alpha" }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+        fetchFn,
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "usage_ledger_unavailable" });
+    expect(activeRequestsDeletes).toEqual(["user_1"]);
   });
 });
