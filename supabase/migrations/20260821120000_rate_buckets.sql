@@ -29,6 +29,7 @@ create or replace function public.debit_bucket(
 )
 returns table(allowed boolean, remaining numeric, retry_after_seconds numeric)
 language plpgsql
+set search_path = public, pg_catalog
 as $$
 declare
   v_tokens     numeric;
@@ -66,3 +67,5 @@ begin
     end;
 end;
 $$;
+
+revoke execute on function public.debit_bucket(text, numeric, numeric, numeric) from anon, authenticated;

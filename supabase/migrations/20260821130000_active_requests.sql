@@ -20,6 +20,7 @@ create or replace function public.claim_concurrency_slot(
 )
 returns boolean
 language sql
+set search_path = public, pg_catalog
 as $$
   insert into public.active_requests (workos_user_id, started_at)
   values (p_user_id, clock_timestamp())
@@ -28,3 +29,5 @@ as $$
     where public.active_requests.started_at < clock_timestamp() - (p_stale_after_seconds || ' seconds')::interval
   returning true;
 $$;
+
+revoke execute on function public.claim_concurrency_slot(text, int) from anon, authenticated;
