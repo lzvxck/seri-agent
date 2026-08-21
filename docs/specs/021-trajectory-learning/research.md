@@ -3,11 +3,13 @@
 Design for seri's cross-session learning loop: record trajectories, analyse them in batch, and
 distil an evolving `POLICY.md` that changes how the harness behaves.
 
-Derived from a proposal in `research.md` (repo root, 2026-08-14) and reconciled against
-`ARCHITECTURE.md`. Where the two disagree, the disagreement is recorded here with the reason rather
+Derived from a proposal in an untracked `research.md` at the repo root (2026-08-14). **That file no
+longer exists** — it was never committed (root scratch docs are not), so this document is now the
+only surviving record of it. Reconciled against
+[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md). Where the two disagree, the disagreement is recorded here with the reason rather
 than silently resolved.
 
-**Status: design only. Nothing here is built.** Stage assignment in Part VI.
+**Status: design only. Nothing here is built.** Sub-stage 12a is spec [`014-trajectory-writer`](../014-trajectory-writer/spec.md); 12b–12d are [`021`](./spec.md), whose state lives in [`../../ROADMAP.md`](../../ROADMAP.md).
 
 ---
 
@@ -142,7 +144,7 @@ recovery showed understanding. Two constraints when it is used:
 
 ### Why a fourth file at all
 
-`ARCHITECTURE.md` Part II §8 lays out five files on two axes and argues explicitly **against** a
+[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) Part II §8 lays out five files on two axes and argues explicitly **against** a
 sixth — that is how `soul.md` was rejected. A new file has to beat two incumbents:
 
 - **memory** = declarative facts ("this repo uses bun, not npm")
@@ -274,7 +276,7 @@ Part V. A proposed diff that has not been A/B'd is not promotable, only viewable
 > No asumiría "better harness → better trajectories" automáticamente.
 
 Right. And unclosed, `POLICY.md` becomes plausible-sounding prose that accumulates and degrades in
-silence — exactly the failure `ARCHITECTURE.md` already named for memory ("opaque memory drift";
+silence — exactly the failure [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) already named for memory ("opaque memory drift";
 Hermes' own docs call stale memory "the number one cause of weird agent behavior").
 
 **If a lesson cannot be falsified, it is not a lesson.** So:
@@ -357,7 +359,7 @@ D → 7b → 11b (v0.1.0 ships) → 8 → 9 → 10
 ```
 
 - **12a alongside D.** Small, additive, no model in the path.
-- **12b after Stage 8.** Stage 8 brings SQLite + FTS5 and `BUILD-PLAN.md` already records the reason
+- **12b after Stage 8.** Stage 8 brings SQLite + FTS5 and [`../../ROADMAP.md`](../../ROADMAP.md) already records the reason
   not to migrate session storage twice. The trajectory store is the same migration; doing it before
   8 means doing it again.
 - **12c/12d post-release.** None of this gates v0.1.0. The release gate is 11b and stays 11b.
@@ -378,7 +380,7 @@ D → 7b → 11b (v0.1.0 ships) → 8 → 9 → 10
 
 Genuinely new: the event schema, the metrics aggregator, the compaction store, the eval harness, and
 `POLICY.md` itself. Everything else is existing machinery pointed at a different job — the same
-observation `BUILD-PLAN.md` made when sequencing 6b inside Stage 6.
+observation [`../../ROADMAP.md`](../../ROADMAP.md) made when sequencing 6b inside Stage 6.
 
 ---
 
@@ -389,7 +391,7 @@ SFT/RL → better model. **Removed from this design, not rejected on merit.**
 
 Three reasons, in order of weight:
 
-1. **It collides with a standing anti-pattern.** `ARCHITECTURE.md` records Devin #2 as an
+1. **It collides with a standing anti-pattern.** [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) records Devin #2 as an
    **explicit anti-pattern** — "we never train on, transmit, or retain user code beyond the session
    without opt-in" — and rejects Hermes #13 (RL trajectory collection) as a direct collision with it,
    noting that human-triggered training "changes who presses the button, not what is being retained
@@ -417,11 +419,11 @@ Loop 2 is designed here, and nothing in Parts I–VI assumes it.
 | 5 | **Judge variance masquerading as improvement** | Hard metrics from code; judge excluded from the gate; A/B on a fixed eval set | Soft dimensions stay unreliable. They rank, they do not decide |
 | 6 | **Goodhart on efficiency.** "Fewer tool calls" is trivially satisfiable by doing less work | Lexicographic composition: correctness is a gate, efficiency only the objective beneath it (Part II) | Any metric can be gamed by a sufficiently capable optimiser. The gate bounds the damage; it does not eliminate the pressure |
 | 7 | **Overfitting to the eval set** | Held-out set the evolution loop never sees; rotate tasks in over time | Small task sets overfit fast. 30–50 is a floor, not a target |
-| 8 | **Policy rot.** Lines that were true in June are wrong in August; nobody re-reads a file that only grows | Hard cap forces consolidation (condition 1); provenance enables age-based review; versioning enables rollback | Nobody has solved staleness. `ARCHITECTURE.md` Part V already lists this as inherited-unsolved for memory and it is inherited here too |
+| 8 | **Policy rot.** Lines that were true in June are wrong in August; nobody re-reads a file that only grows | Hard cap forces consolidation (condition 1); provenance enables age-based review; versioning enables rollback | Nobody has solved staleness. [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) Part V already lists this as inherited-unsolved for memory and it is inherited here too |
 | 9 | **Two writers, one concept.** `archivist` and `evolver` both plausibly want to record "how to work in this repo" | One writer per file, enforced by the toolset each role is given, not by prompt | Boundary cases will land in the wrong file. Provenance makes them findable |
 | 10 | **Unattended promotion.** `/evolve` under a future scheduler *[Hermes #12]* with no human present | Promotion requires human approval, full stop — inherited from `.claude/rules/retro.md`. The unattended permission surface is already an open item gating Stage 8 | Until that item is settled, `/evolve` is interactive-only. Stated, not worked around |
 | 11 | **Learning from a weak model's trajectories.** Cheap-model sessions produce bad habits that get distilled into policy | Record the model per turn (already shipped, Stage 7a/C) and make it a first-class field in the compaction schema, so the analyser can weight or exclude by model | Unmeasured. Whether weak-model trajectories help or hurt is itself an experiment worth running |
-| 12 | **The whole loop is not worth its cost.** Plausible, and nobody in the field has measured it | Part V's three arms, with the hand-written baseline as the honest comparator | Genuinely open. `ARCHITECTURE.md` Part V already says the archivist's own token cost is unmeasured field-wide; this is the same question one level up |
+| 12 | **The whole loop is not worth its cost.** Plausible, and nobody in the field has measured it | Part V's three arms, with the hand-written baseline as the honest comparator | Genuinely open. [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) Part V already says the archivist's own token cost is unmeasured field-wide; this is the same question one level up |
 
 ---
 
@@ -433,7 +435,7 @@ The defensible claim is narrow and testable:
 > rather than an LLM judge, improves held-out task performance over both no policy and a
 > human-written policy baseline.**
 
-Not "self-evolving harness." That label is taken, and `ARCHITECTURE.md` already records the critique
+Not "self-evolving harness." That label is taken, and [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) already records the critique
 of it: independent audit of Hermes found "no autonomous source modification, no prompt rewriting and
 no self-grading… the agent provides the data; humans press the button." Overclaiming invites exactly
 that audit.
