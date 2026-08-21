@@ -108,14 +108,11 @@ describe("resolvePaidDailyCap", () => {
 });
 
 describe("decidePreflight — free plan", () => {
-  const catalog = catalogWith(FREE_ENTRY, PRICED_ENTRY);
-
   test("allows one request under the daily cap", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: FREE_DAILY_REQUEST_CAP - 1,
         spendUsd: 0,
       }),
@@ -126,8 +123,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: FREE_DAILY_REQUEST_CAP,
         spendUsd: 0,
       }),
@@ -138,8 +134,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: FREE_DAILY_REQUEST_CAP + 1,
         spendUsd: 0,
       }),
@@ -150,8 +145,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: 0,
         spendUsd: 0,
       }),
@@ -162,8 +156,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: 0,
       }),
@@ -175,8 +168,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: 0,
       }).allow,
@@ -187,8 +179,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: FREE_DAILY_REQUEST_CAP,
         spendUsd: 0,
       }).allow,
@@ -201,8 +192,7 @@ describe("decidePreflight — free plan", () => {
     expect(
       decidePreflight({
         plan: "free",
-        modelId: FREE_ENTRY.id,
-        catalog,
+        entry: FREE_ENTRY,
         requestsToday: 0,
         spendUsd: 1_000_000,
       }),
@@ -211,16 +201,13 @@ describe("decidePreflight — free plan", () => {
 });
 
 describe("decidePreflight — paid plans", () => {
-  const catalog = catalogWith(FREE_ENTRY, PRICED_ENTRY);
-
   test.each([...PAID_PLANS])("%s: refuses at the included-spend threshold", (plan) => {
     const allowance = PLAN_MONTHLY_USD[plan] * INCLUDED_SPEND_RATIO;
 
     expect(
       decidePreflight({
         plan,
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: allowance,
       }),
@@ -233,8 +220,7 @@ describe("decidePreflight — paid plans", () => {
     expect(
       decidePreflight({
         plan,
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: allowance - 0.01,
       }),
@@ -249,8 +235,7 @@ describe("decidePreflight — paid plans", () => {
     expect(
       decidePreflight({
         plan: "pro",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: PAID_DAILY_REQUEST_CAP,
         spendUsd: 0,
       }),
@@ -261,8 +246,7 @@ describe("decidePreflight — paid plans", () => {
     expect(
       decidePreflight({
         plan: "pro",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: PAID_DAILY_REQUEST_CAP - 1,
         spendUsd: 0,
       }),
@@ -277,8 +261,7 @@ describe("decidePreflight — paid plans", () => {
     expect(
       decidePreflight({
         plan: "pro",
-        modelId: PRICED_ENTRY.id,
-        catalog,
+        entry: PRICED_ENTRY,
         requestsToday: 0,
         spendUsd: allowance,
       }),
