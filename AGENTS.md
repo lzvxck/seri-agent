@@ -1,212 +1,132 @@
 # AGENTS.md
 
-Guidance for AI agents working in this repository.
+Conventions for working in this repository. Rules, not a tour of the codebase — if you want to
+know how something works, read the code or `docs/`.
 
 ## What this is
 
-seri is a cross-platform coding-agent CLI (ships as the `seri` binary), written in
-TypeScript on Bun. `docs/README.md` is the map; the short version:
+seri is a cross-platform coding-agent CLI (ships as the `seri` binary), TypeScript on Bun.
+`docs/README.md` is the map; the short version:
 
 - `docs/ROADMAP.md` — **the single source of stage state.** What is built, what is next.
-  Nothing else records status.
-- `docs/specs/<NNN>-<slug>/` — one directory per unit of work: the reasoning, the scope
-  and the acceptance criteria. Cite these by `#anchor`, never by line number.
+- `docs/specs/<NNN>-<slug>/` — one directory per unit of work: scope, reasoning, acceptance
+  criteria. Cite these by `#anchor`, never by line number.
 - `docs/ARCHITECTURE.md` — what the system is, present tense.
 - `docs/CONSTITUTION.md` — what no design may violate. Read before proposing one.
 - `docs/decisions/` — why a mechanism beat its alternative, one ADR per file.
 
-Hosted accounts and billing sit on top of the BYOK-only core: auth shipped first, then the
-hosted gateway (`docs/specs/022-hosted-gateway/`).
-
-## Scope: code-first, not code-only
-
-Coding is the primary use and the only one this release ships for, but it is not the
-boundary of the product — seri is intended to extend into general assistant work
-(constraint #3, `docs/CONSTITUTION.md`). It constrains what you may assume, not what
-you may build: don't reject a design for being assistant-shaped (a design only
-coherent inside a repository is what's actually ruled out — there's no `AGENTS.md`
-outside one). Don't broaden v1 either — assistant surfaces start at the daemon,
-`docs/specs/018-daemon/` (post-release); everything up to the release gate
-(`docs/specs/017-distribution/`) stays a coding agent.
+**Code-first, not code-only.** Coding is the primary use and the only one this release ships
+for, but it is not the boundary of the product. That constrains what you may *assume*, not what
+you may build: do not reject a design for being assistant-shaped — what is actually ruled out is
+a design only coherent inside a repository. Do not broaden v1 either. Constraint #3,
+`docs/CONSTITUTION.md`.
 
 ## Commands
 
-- `bun run dev -- <args>` — run the CLI from source (CLI only; `bun run dev:server`
-  for `apps/server`)
-- `bun test` — run the test suite (bun's built-in runner)
-- `bun test path/to/file.test.ts` — run a single test file
+- `bun run dev -- <args>` — run the CLI from source (`bun run dev:server` for `apps/server`)
+- `bun test` / `bun test path/to/file.test.ts`
 - `bun run typecheck` (alias `lint`) — `tsc --noEmit`
 - `bun run build` — compile to `dist/seri` for the current platform
-- CI (`.github/workflows/ci.yml`) runs typecheck + test + build on Linux, macOS, and
-  Windows on every push — treat all three as required, not just the local OS
 
-## Architecture
+CI (`.github/workflows/ci.yml`) runs typecheck + test + build on Linux, macOS **and** Windows on
+every push. Treat all three as required, not just your own OS.
 
-**The loop is a library, not a CLI.** `apps/cli/src/loop/loop.ts` (`runLoop`) is a stateless
-async generator: it takes a model, tools, and messages, and yields `LoopEvent`s
-(text-delta, tool-call, tool-result, permission-denied, compacted, done, error). It
-never touches stdout/stdin directly. `apps/cli/src/cli.ts` is a thin consumer that prints events
-and prompts for approval. This boundary is deliberate and load-bearing — a future
-daemon/transport layer is expected to consume the same generator.
+## Invariants
 
-**argv is parsed once, in `cli.ts`, with `node:util`'s `parseArgs`** — the loop never sees argv.
-Flags are flags in any position and remaining positionals are the task; `--` is the documented
-escape for a task that contains what looks like a flag (`seri -- fix the --help output`). Exit
-codes: **0** a request was served or the turn finished, **1** the turn did not finish, **2** a bad
-invocation (parseArgs rejected it, or no task was given; `config`'s own invocation errors also
-exit 2). `--max-turns <n>` is the only `runLoop` option the CLI sets, default 500. `--help`/
-`--version`/`--selftest` are checked before any subcommand dispatch, so `seri login --help` (and
-`signup`/`logout`) prints seri's own usage rather than reaching the subcommand.
+These are load-bearing. Breaking one is a design change, not a refactor.
+
+**The loop is a library, not a CLI.** `runLoop` (`apps/cli/src/loop/loop.ts`) is a stateless
+async generator that yields `LoopEvent`s and never touches stdout/stdin. `apps/cli/src/cli.ts`
+is a thin consumer. A future daemon consumes the same generator, so do not put I/O, process
+globals, or CLI concerns behind this boundary.
+
+**argv is parsed once, in `cli.ts`, with `node:util`'s `parseArgs`.** The loop never sees argv.
+Exit codes: **0** a request was served or the turn finished · **1** the turn did not finish ·
+**2** a bad invocation. Do not add a third meaning to any of them.
 
 **Cancellation belongs to the consumer.** `runLoop` accepts an optional `AbortSignal` and never
-constructs one — `apps/cli/src/cli.ts` owns an `AbortController` per run. The signal reaches
-`streamText`, `compactMessages`, and every tool via `ToolExecutionOptions.abortSignal`. The
-**first** Ctrl-C cancels the in-flight turn (`done.reason: "aborted"`, not an `error` — a
-user-initiated cancel isn't a failure) and leaves the session resumable; the **second** is fatal.
-Exit codes otherwise track whether the turn accomplished anything: `no-tool-call` exits 0 unless
-every write attempt was declined and nothing executed (exits 1 too); a mode `read-only` block is
-not a failure (still 0); the iteration cap and `repeated-denials` both exit 1. Mechanism and the
-platform-specific gotchas (SIGINT-vs-SIGTERM, why `runRipgrep` has to be async so a search can be
-interrupted) live in `apps/cli/src/signals.ts` — read its comments before touching signal
-handling, don't re-derive the sequencing from this summary.
+constructs one. Every tool must thread `ToolExecutionOptions.abortSignal` through — a tool that
+ignores it cannot be interrupted. Read `apps/cli/src/signals.ts`'s own comments before touching
+signal handling; do not re-derive the sequencing from any summary, including this file.
 
-**On a real terminal (the Ink TUI, `apps/cli/src/tui/`), the same first-cancels/second-is-fatal
-rule only holds while a turn is actually in flight** — the cancel slot is registered for the
-duration of one `driveLoop` call, not the process's whole lifetime, so a Ctrl-C pressed while
-nothing is running (between turns) finds the slot already empty and is immediately fatal, not a
-"first press" with a second still to come. The TUI never exits on its own once a turn
-completes — it returns to awaiting input for another task or slash command, indefinitely; the
-only graceful exit is `/exit` (an exact match — trailing words show a command-error instead of
-quitting, the same as every other TUI slash command's own `accepts()` guard failing shows a
-command-error rather than silently falling through to a task; that fallback is the
-NON-INTERACTIVE `handleSlashCommand`'s own behavior for input its table doesn't match at all, a
-different path) or Ctrl-D at the input box. If nothing
-is running, both unmount the TUI immediately and resolve the run with a normal exit code and the
-same final `printUsage` token/cost summary the non-interactive path prints, accumulated across
-every turn the session ran (exit 0, the same as any other completed `no-tool-call` turn). If a
-turn IS in flight, quitting cancels it first — the same `deliverSignal`/cancel-slot mechanism a
-single Ctrl-C uses — and waits for it to actually unwind before exiting, so a tool mid-write is
-never orphaned and whatever usage that turn had already spent still makes it into the summary;
-the exit code in that case is 1, the same code every other *unaccomplished* run returns
-(`max-iterations`, `repeated-denials`, a declined-and-nothing-ran `no-tool-call`) — not the
-signal-death every OTHER abort path in this file uses, and not 0 either: `seri "task" && next`
-must not run `next` off the back of a task `/exit` cut short. This assumes the cancel slot is
-free; if a Ctrl-C already spent it (the paragraph above), quitting has nothing left to cancel
-with and escalates straight to the fatal path instead, the same as a second Ctrl-C would — no
-summary, no unwind, the process dies by signal.
+**`WRITE_TOOL_NAMES` (`apps/cli/src/provider/tools.ts`) is the single source of truth for
+whether a tool needs permission.** A new write-capable tool that is not added there silently
+bypasses the gate. The one deliberate exception is `memory_write`, which writes under the
+profile root rather than the worktree and is gated by the `/memory` staging system instead — if
+you add a second exception, it needs a reason written down next to it.
 
-**`--max-turns` means something different in the TUI (finding 8, thermo-nuclear structural
-review, round 6): a per-task budget, not a per-session one.** `driveLoop` is called fresh for
-every submitted task in an interactive session (`runTui`'s own `runTurn`), each call getting the
-same `maxIterations: maxTurns` passed at startup — so a session that submits five tasks gets up to
-`maxTurns` model turns for EACH of them, not `maxTurns` total across the whole session, unlike the
-non-interactive `seri <task>` invocation, where one `driveLoop` call is the whole run. Deliberate,
-not a bug: a hard session-wide cap would make a long interactive session progressively less usable
-the more it was used, which is not what an iteration cap is for.
+**`bash` and `powershell` never get an "always" option**, run-scoped or persisted. A grant keyed
+on a tool name says nothing about what a shell command will do.
 
-**Gate-first permissions**, not sandboxing. `apps/cli/src/gate/gate.ts` defines three
-`PermissionMode`s (`read-only` / `approve-each` / `auto`) that cycle via `/mode`. A new
-session starts in `approve-each`, not `read-only`: native Windows does not enforce the OS
-sandbox, so the gate is the whole Base layer and a default that does not ask is a default
-that writes unattended. Answering `a`/always at the prompt adds the tool to an allowlist so
-`approve-each` isn't an approve-*every*-call mode; for `write_file`/`edit` that grant also
-persists across processes (`seri permissions list|remove`, `<configDir>/permissions.yaml`).
-**`bash`/`powershell` never get an "always" option, run-scoped or persisted** — a grant keyed
-on a tool name says nothing about what a shell command will do. Neither tier survives a cycle
-into `read-only`. `seri --dangerously-skip-permissions` maps to `auto` for that run only, never
-written back to the session. Repeated declines (`MAX_CONSECUTIVE_DENIALS`, 3 in a row) stop the
-run early rather than burning to the turn cap — only reachable in `approve-each`, since
-`read-only` blocks outright and nothing is ever "declined" there. Full mechanics of the
-permanent store are in `apps/cli/src/permissions/store.ts`'s own comments.
+**`--dangerously-skip-permissions` is never written back to the session.** It is attended-only
+by construction; a later `--continue` or a scheduled resume must not inherit it.
 
-Whether a tool needs permission at all is derived from `WRITE_TOOL_NAMES` in
-`apps/cli/src/provider/tools.ts` — **single source of truth**; a new write-capable tool must be
-added there or it silently bypasses the gate. The one confirmed exception is `memory_write`
-(`apps/cli/src/memory/tool.ts`): it is genuinely write-capable but deliberately kept out of
-`WRITE_TOOL_NAMES`, because it writes under the profile root, not the worktree, and is gated
-instead by the `/memory` approval-staging system plus the archivist's own hardcoded
-`permissionMode: "auto"` — not by this gate at all. The AI SDK's automatic tool execution is
-disabled (`execute` stripped before `streamText`); `runLoop` calls each tool's `execute` itself,
-after the gate decides whether it's allowed to run.
+**The AI SDK's automatic tool execution stays disabled.** `execute` is stripped before
+`streamText`; `runLoop` calls it itself, after the gate decides. Re-enabling it puts writes
+outside the gate.
 
-**Tools are pure functions**, independently testable without a model:
-`read_file`/`write_file`/`edit`/`grep`/`glob` (`apps/cli/src/tools/`), plus `bash` and
-`powershell` — two separate shells, no translation layer between them (Windows always
-gets a real PowerShell; bash is opt-in via Git Bash detection). `edit` is a 3-tier
-match cascade (exact → line-trimmed → whitespace-normalized) with a
-disproportionate-match guard against replacing far more than was asked for.
+**Pin only what worked.** A (model, provider) pair reaches disk only after a real turn on it
+succeeds. Do not persist a selection at pick time.
 
-**Provider**: Vercel AI SDK, five providers — Groq (`apps/cli/src/provider/groq.ts`,
-`openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement behind that
-default is in `docs/research/2026-08-prompt-routing.md`), OpenRouter (`apps/cli/src/provider/openrouter.ts`,
-`compatibility: "strict"`), and native Anthropic/OpenAI/Google
-(`apps/cli/src/provider/{anthropic,openai,google}.ts`) — `SERI_PROVIDER` (default `groq`) names
-which one `SERI_MODEL` is read against. A new session starts on whichever (model, provider) pair
-was last confirmed by a real turn — the built-in Groq default the first time, or a persisted
-`/model` pick after that. Switching, mid-session, is the in-TUI `/model` picker
-(`apps/cli/src/tui/App.tsx`'s `ModelPicker`) — context preserved, only written to disk once a
-turn on the new model actually succeeds (`apps/cli/src/cli.ts`'s "pin only what worked"
-invariant). Note this holds for a live switch specifically; a brand-new TUI session's
-not-yet-confirmed model can still reach disk earlier via a mount-time effect — a separate,
-pre-existing gap, not something this sentence should be read as claiming is closed. That same
-"pin only what worked" confirmation is also what now persists `SERI_MODEL`/`SERI_PROVIDER` to
-`config.json` (`apps/cli/src/provider/defaults.ts`'s `persistDefaultModel`), making a successful
-pick the default for every future brand-new session, not just the current one — a session that
-never touches `/model` never writes either key. A requested (model, provider) pair whose own
-provider has no key is resolved ahead of dispatch by `resolveRoute`
-(`apps/cli/src/provider/routing.ts`): if a sibling route to the same logical model (grouped by
-`routeKey`, `packages/model-catalog/src/routes.ts` — vendor-aware, since the same model does not
-share an id across providers) has a key, that sibling is used instead, native providers preferred
-over an aggregator (Groq/OpenRouter); an explicit `/model` pick always wins over this if its own
-provider has a key, and a reroute is announced once per turn in the transcript. `/model`'s picker
-shows every route one model is reachable through, adjacently, with a `your key`/`no key` column.
-`/setup` (inside the TUI) lists, adds, replaces and removes a BYOK key per provider — the
-in-TUI equivalent of `seri config set`, with one lightweight `generateText` probe rejecting a key
-only on a 401/403; everything else stores it anyway with a warning, since an unverifiable-but-wrong
-key still fails loudly on first real use, same as before this existed. All five providers' model metadata (context
-window, pricing, tool-call/reasoning support) comes from a models.dev-sourced catalog
-(`packages/model-catalog`, wrapped for the CLI in `apps/cli/src/provider/catalog.ts`), fetched
-live with a bundled fallback manifest (`catalog-manifest.json`) for a failed fetch or
-`SERI_DISABLE_MODELS_FETCH`. A run's dollar cost is reported with its provenance
-(`apps/cli/src/provider/cost.ts`'s `CostReport`) — provider-reported `actual` for OpenRouter,
-catalog-computed `estimated` for the other four (`reportFromCatalogPricing`), printed with a
-visibly different line for each. API keys resolve from env var first, then
-`~/.seri/config.json` — see
-`apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. A non-default profile
-(`--profile <name>` or `SERI_PROFILE`, the flag wins) puts config.json, auth.json,
-permissions.yaml, sessions/ and checkpoints/ under `<root>/<profile>/` instead; the vendored
-`rg/` cache stays shared across every profile. `seri config
-set|list|unset` (`apps/cli/src/config/commands.ts`) manages that file; it's written
-owner-only and via write-then-rename, since it holds API keys and a partial write
-would break every later command's `loadConfig`. `list` masks values and flags any
-shadowed by an env var, because `getApiKey` prefers `process.env`.
+**Two shells, no translation layer.** `bash` and `powershell` each take their own syntax; the
+harness never rewrites a command from one into the other.
 
-# Seri Code Review Guidelines
+**Tools are pure functions**, testable without a model. Keep them that way — a tool that needs a
+live provider to test is a tool that will not be tested.
 
-Seri is a research-oriented agentic coding harness designed to build, run,
-evaluate, and improve autonomous software engineering agents.
+**`config.json` holds API keys.** It is written owner-only and via write-then-rename; a partial
+write breaks every later `loadConfig`. Do not introduce a non-atomic path to it.
 
-## Review priorities
+## Code style
 
-- Prioritize behavioral correctness and robustness over stylistic preferences.
-- Treat agent loops, state, context, memory, and tool execution as high-risk areas.
-- Flag unnecessary LLM calls, excessive token usage, avoidable latency, and inefficient tool usage.
-- Flag hidden state, brittle control flow, race conditions, and problematic non-determinism.
-- Check error handling, retries, recovery, cancellation, and failure modes.
-- Prefer simple, testable, composable implementations.
-- Avoid abstractions that do not solve a concrete problem.
-- Consider extensibility across different models, agent strategies, memory systems,
-  evaluators, and execution policies.
-- For LLM-related changes, consider context quality, context-window limitations,
-  model reliability, token usage, latency, and graceful degradation.
-- Consider the impact of changes on autonomous task completion, reproducibility,
-  observability, and debugging.
+- **Biome** for format and lint (`biome.json`): 2-space indent, double quotes, 100-column lines.
+  Run it rather than hand-formatting.
+- `.claude/rules/code-quality.md` is the authoring rulebook — simplicity first, surgical changes,
+  goal-driven execution. Read it before a non-trivial change; it carries measured incidents, not
+  preferences.
+- **Comments explain why, using terms the code provides.** Never cite a stage number, a plan
+  document, a loop slug, a PR number, or a review round in a comment — none of those are
+  checkable from the source tree. That context belongs in the commit message.
+- **A comment that documents an intention rather than a behaviour is worse than none.** When you
+  change code a nearby comment describes, make the comment true or delete it — and say which
+  comments you corrected, not only which code.
 
-## Notes for agents
+## Testing
 
-- `.claude/` holds this project's own Claude Code loop/agent/skill configuration
-  (engineering-loop, retro, etc.) — it's gitignored and orthogonal to seri's own code.
-- `apps/cli/src/tools/rg-vendored.bin` is a vendored ripgrep binary fetched by
-  `postinstall`/`vendorRipgrep.ts`; don't hand-edit it.
-- Feature work lands via a branch + PR (`main` has branch protection), not direct
-  pushes — see `.claude/rules/git-workflow.md` if present.
+- `bun test`, bun's built-in runner. No mocks where a real implementation will do.
+- **A check must be seen to fail before it counts as passing.** Record the negative control next
+  to the green result — the mutation that turns it red, or the setup that was skipped. A check
+  whose subject was never touched reports success identically to one that worked.
+- **A green matrix does not cover the *unset* case.** Every dev box and CI runner has `HOME` /
+  `LOCALAPPDATA` set. If a change makes a path newly depend on an env var, the test deletes the
+  variable and asserts the fallback.
+- Carry forward platform guards (`describe.skipIf`) and timeout margins from the existing test of
+  a primitive you are re-testing, rather than letting CI rediscover them.
+
+## Branches, commits, PRs
+
+- Feature work lands via a branch and a PR. `main` has branch protection; do not push to it
+  directly. See `.claude/rules/git-workflow.md`.
+- Conventional commits: `type(scope): summary` — `feat`, `fix`, `docs`, `chore`, `refactor`,
+  `test`. Scope is the affected area (`cli`, `tui`, `server`, `portal`, `loop`).
+- Scale review to risk: a docs-only or comment-only diff does not need the review machinery, and
+  a typecheck is the right stopping point when nothing executable changed.
+
+## Gotchas
+
+- **`.claude/` is tracked**, deliberately — it is how this project works. Only `.claude/loops/`,
+  `.claude/worktrees/`, `.claude/settings.local.json` and `.claude/lessons/proposed/*` are
+  ignored; `.gitignore` states the reason for each.
+- `apps/cli/src/tools/rg-vendored.bin` is a vendored ripgrep fetched by
+  `postinstall` / `vendorRipgrep.ts`. Never hand-edit it.
+- `--max-turns` is a **per-task** budget in the TUI, not a per-session one: `driveLoop` is called
+  fresh for every submitted task. Deliberate — a session-wide cap would make a long session
+  progressively less usable.
+- A non-default profile (`--profile <name>` or `SERI_PROFILE`, the flag wins) relocates
+  `config.json`, `auth.json`, `permissions.yaml`, `sessions/` and `checkpoints/`. The vendored
+  `rg/` cache stays shared across profiles.
+
+## Review
+
+Grading a change is a different job from writing one; the rubric lives in
+`.claude/rules/code-review.md`.
