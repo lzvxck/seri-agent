@@ -1,120 +1,120 @@
 # Roadmap
 
-Execution order and current state. **This file tracks *what* is next; it does not argue *why*** —
-the reasoning, the verify criteria and the stage contents live in
-[`docs/BUILD-PLAN.md`](./docs/BUILD-PLAN.md), which stays the source of truth. If the two ever
-disagree, BUILD-PLAN wins and this file is stale.
+**This file is the single source of stage state.** Nothing else — not `ARCHITECTURE.md`, not a
+spec body, not a second table — records whether something is built. A stage whose state appears in
+two places is a stage whose state is wrong in one of them.
 
-Stage numbers are identities, not an order. They are referenced from outside the plan, so they do
-not get renumbered when the order changes.
+What each row does *not* carry: the reasoning, the verify bar, the scope. Those live in that row's
+spec under [`specs/`](./specs/). What no design may violate lives in
+[`CONSTITUTION.md`](./CONSTITUTION.md). Why a mechanism beat its alternative lives in
+[`decisions/`](./decisions/).
 
-Last reconciled against the repo: 2026-08-11 (Stage 6/6b merged).
+Last reconciled against the repo: **2026-08-21** (git log through PR #146).
 
-## Shipped
+## Spec IDs, and the stage numbers they replace
 
-| Stage | Landed |
-|---|---|
-| 0 — Foundation | build, CI matrix on Windows/macOS/Linux, config dir |
-| 1 — Tools | read/write/edit cascade, grep/glob, bash + powershell |
-| 2 — Loop, provider, gate | **v0**. Provider is Groq, not the Anthropic-direct the plan assumed |
-| 3 — Compaction | goal/progress/blockers/next-steps schema |
-| 4 — Checkpoints | PR #17, CI green on all three OSes — **v1, the fully working MVP** |
-| A — Abort/cancellation | PR #23. Unnumbered; `AbortSignal` through the loop and rg |
-| 5 — Verification loop | PR #41. **Retargeted**: the check runs after `write_file`, not `edit`, and a failed edit gets a near-miss report. The original spec was unbuildable — see BUILD-PLAN's Stage 5 section |
-| B1 — profile root | PR #54. `--profile`/`SERI_PROFILE` select a profile root under `apps/cli/src/config/paths.ts`, defaulting to `default` with no `<profile>` segment and no behavioral delta from the prior fixed home |
-| B2 — prompt tiers | PR #58. `buildSystemPrompt` (`apps/cli/src/agents/systemPrompt.ts`) splits into ordered stable/context/volatile tiers; volatile ships empty (no memory built), byte-identical output confirmed for the no-memory case |
-| 11a — TUI | PR #60. Ink-rendered TUI (`apps/cli/src/tui/`) on top of Stage 2's streaming layer — live status region, multiline input; slash commands mutate the live session through a reducer instead of a disk copy. Pty-driven tests cover Ctrl-C cancellation, `/exit`, and mid-turn command gating, CI green on all three OSes. **Reversed 2026-08-16:** the original inline, append-only transcript is now full-screen alternate-screen-buffer rendering with a scrollable transcript viewport — see BUILD-PLAN's Stage 11a section |
-| 6 — subagents + 6b archivist/memory | PR #81 (fixed roster + `dispatch_subagents`), PR #82 (archivist role + 3-file persistent memory). See "Stage 6 shipped" below |
+Specs are numbered sequentially from `001` and are **never renumbered or reused**. The old
+`BUILD-PLAN.md` stage numbers are referenced from outside this repo — `PHASE-A-HANDOFF.md` gates
+work on "Stage 7", `specs/021`'s design text says "Stage 12a" throughout — so this mapping is
+permanent, not transitional. Read it whenever an older document names a stage.
 
-**Stage B is now fully shipped** (B1 + the Windows config-root relocation to `~/.seri`, PR #56 + B2).
-
-**11a follow-ups (post-merge):** PR #62 fixed the user's own submitted input not being echoed into
-the TUI transcript. PR #63 investigated a separate Windows TUI feedback-delay symptom —
-**inconclusive, no fix landed**; needs a live pty repro on Git Bash/MINGW64, not just WSL2/Linux.
-
-**7a — the gateway.** PR #65 (2026-08-09): OpenRouter provider, models.dev-sourced catalog, cost
-provenance (`actual` vs. `estimated`, per BUILD-PLAN's Stage 7a verify bar — both confirmed live),
-the `/model` picker. PR #66 same day: per-turn model self-identification (the volatile prompt tier
-names which model is actually answering).
-
-**C — Multi-provider BYOK routing (unnumbered, post-7a, no stage assigned — surfaced in
-conversation 2026-08-10, not part of the stage sequence above).** Native Anthropic/OpenAI/Google
-provider integrations alongside Groq/OpenRouter, global model/provider persistence (PR #71);
-per-provider routing-priority resolution, `/model` showing every reachable route explicitly instead
-of one collapsed entry, and `/setup` for in-TUI BYOK key management — list/add/replace/remove
-across all 5 providers (PR #73); the `/model` Route column naming the actual reroute target instead
-of a bare alternatives count (PR #75); the TUI's mid-session missing-key message pointing at
-`/setup` instead of the non-interactive `seri config set` (PR #76); provider names humanized in
-purely-informational messages, raw env-var names kept wherever a message embeds a literal
-actionable command (PR #77). Follow-ups still open, not shipped: guided `/setup` on a genuinely
-blank first run (today it exits before the TUI mounts — see `BYOK-KEY-STORAGE-AND-SETUP.md`, repo
-root, "Open 2"), and per-provider key priority once the hosted gateway exists (same doc, "Open 3").
-Key-storage security (plaintext `config.json`, no OS keychain) was investigated and matches how
-comparable harnesses (opencode, Hermes, Codex, prime-agent) do it — accepted as-is, not a gap.
-
-**D — BYOK guided first-run setup + gateway route-column interface (unnumbered, reprioritized ahead
-of 7b, 2026-08-12).** Full design: `.claude/loops/byok-setup-gateway-research/research-spec.md`.
-Fixes Open 2 (a genuinely blank first run — zero keys configured anywhere — throws in
-`prepareSession` before the TUI ever mounts, so the user never sees `/setup`; detect this at session
-start and route into `/setup`'s existing guided flow instead) and lands Open 3's *interface only*
-(a fourth `/model` Route-column state, `gatewayReachable`/`"provided"`, plus a persistent model+route
-indicator in the TUI reusing the same label vocabulary — both wired to a `planCoverage` predicate
-that returns `false` for everything, i.e. zero behavior change, until the hosted gateway exists to
-back it). Explicitly does **not** include the hosted gateway itself (Phase B, below) — that stays its
-own unscheduled track; this stage only makes sure the CLI-side interface is ready and not rebuilt
-mid-gateway-build. Reprioritized ahead of 7b because Open 2 is a live bug (a fresh install cannot
-reach `/setup` at all in a real interactive terminal), not a new feature.
-
-## Remaining, in execution order
-
-| # | Stage | State | Why here |
+| Old stage | Spec | Old stage | Spec |
 |---|---|---|---|
-| 1 | **12a — event schema + trajectory writer** | not started | Pulled ahead of D (2026-08-14). Additive, no model in the path, and sessions that land uninstrumented are corpus that can never be recovered. Same "cheap strictly because it is early" argument as the profile root and the prompt tiers. Design: [`EVOLUTION.md`](./EVOLUTION.md) |
-| 2 | **D — BYOK guided setup + gateway route interface** | not started | Reprioritized ahead of 7b, 2026-08-12: Open 2 is a live bug (fresh install can't reach `/setup`), higher urgency than 7b's new-feature work. Design: `.claude/loops/byok-setup-gateway-research/research-spec.md` |
-| 3 | **7b — routing of roles** | not started | Architect/editor split, oracle. After 6 (shipped) because the oracle *is* a subagent, reusing Stage 6's dispatch machinery |
-| 4 | **11b — distribution** | not started | **Release gate — v0.1.0 ships here**, after 7b and with the gateway, subagents and role routing in it |
-| 5 | **8 — daemon** | post-release | Where the assistant arc starts (constraint #3). SQLite + FTS5 search |
-| 6 | **9 — OS sandbox tier** | post-release | bwrap / sandbox-exec / taskkill, surfaced by `seri doctor` |
-| 7 | **10 — extensibility** | post-release | MCP, hooks, recipes — including the archivist's recipe *write* path. **Directory-level trust lands here**: it is one harness-wide decision covering instruction files, hooks and servers together, not a per-feature prompt |
-| 8 | **12b–12d — trajectory learning + `POLICY.md`** | post-release | Cross-session learning: compaction store (12b, needs 8's SQLite — same migration, not done twice), eval harness (12c), then `evolver` + `POLICY.md` + `/evolve` (12d, **gated on 12c**). Design: [`EVOLUTION.md`](./EVOLUTION.md) |
+| Stage 0 | [`001-foundation`](./specs/001-foundation/) | Stage 7a | [`011-gateway`](./specs/011-gateway/) |
+| Stage 1 | [`002-tools`](./specs/002-tools/) | Stage 6 + 6b | [`012-subagents-archivist`](./specs/012-subagents-archivist/) |
+| Stage 2 | [`003-loop-provider-gate`](./specs/003-loop-provider-gate/) | Stage C | [`013-multi-provider-byok`](./specs/013-multi-provider-byok/) |
+| Stage 3 | [`004-compaction`](./specs/004-compaction/) | Stage 12a | [`014-trajectory-writer`](./specs/014-trajectory-writer/) |
+| Stage 4 | [`005-checkpoints`](./specs/005-checkpoints/) | Stage D | [`015-byok-guided-setup`](./specs/015-byok-guided-setup/) |
+| Stage A | [`006-abort-cancellation`](./specs/006-abort-cancellation/) | Stage 7b | [`016-role-routing`](./specs/016-role-routing/) |
+| Stage 5 | [`007-verification-loop`](./specs/007-verification-loop/) | Stage 11b | [`017-distribution`](./specs/017-distribution/) |
+| Stage B1 | [`008-profile-root`](./specs/008-profile-root/) | Stage 8 | [`018-daemon`](./specs/018-daemon/) |
+| Stage B2 | [`009-prompt-tiers`](./specs/009-prompt-tiers/) | Stage 9 | [`019-os-sandbox`](./specs/019-os-sandbox/) |
+| Stage 11a | [`010-tui`](./specs/010-tui/) | Stage 10 | [`020-extensibility`](./specs/020-extensibility/) |
+| Stage 12b–d | [`021-trajectory-learning`](./specs/021-trajectory-learning/) | billing Phase B | [`022-hosted-gateway`](./specs/022-hosted-gateway/) |
 
-Billing Phase B, the spend cap, and the portal's usage surface — the three things that were waiting
-on 7a — are unblocked as of PR #65. They are not scheduled here: Phase B is its own track
-(`docs-tmp/pricing-tiers.md`, `.claude/loops/hosted-accounts-billing-gateway/`), not started, and
-independent of the numbered stage sequence below.
+`023-gateway-rate-limiting` is new — it never had a stage number.
 
-## Stage 6 shipped
+## State
 
-Subagents: named roles (`explore`/`plan`/`code`/`test`), one-level recursion limit (structural, not
-a depth counter — the dispatch tool is simply absent from every child's own `ToolSet`),
-parallel-by-default with explicit serialization on any role holding a mutating tool — PR #81. Plus
-6b, the `archivist` role and persistent memory (three files under `~/.seri/memories/`: `USER.md`
-global, `MEMORY.md` global, `MEMORY.md` per project, plus a global `~/.seri/AGENTS.md`;
-approval-gated writes staged to `~/.seri/pending/`; a `reason`/`durable` provenance tag on every
-write; a `/memory archivist on|off` toggle independent of the approval gate; the "famous
-self-improving agent" piece) — PR #82. Both went through five rounds of independent review
-(reviewer-verifier, paired `/code-review`/thermo-nuclear passes, and real GitHub CI, which caught a
-cross-platform bug — a rename-based atomic write silently bypassing a read-only destination file's
-permissions — that five rounds of AI code review had not) before merging. See `docs/BUILD-PLAN.md`'s
-Stage 6 section for the full rationale and verify bar, both now marked confirmed.
+| # | Spec | State | PRs |
+|---|---|---|---|
+| 001 | [Foundation](./specs/001-foundation/) | ✅ done | — |
+| 002 | [Tools](./specs/002-tools/) | ✅ done | — |
+| 003 | [Loop, provider, gate](./specs/003-loop-provider-gate/) | ✅ done — **v0** | — |
+| 004 | [Compaction](./specs/004-compaction/) | ✅ done | — |
+| 005 | [Checkpoints](./specs/005-checkpoints/) | ✅ done — **v1** | #17 |
+| 006 | [Abort and cancellation](./specs/006-abort-cancellation/) | ✅ done | #23 |
+| 007 | [Verification loop](./specs/007-verification-loop/) | ✅ done — retargeted | #41 |
+| 008 | [Profile root](./specs/008-profile-root/) | ✅ done | #54, #56 |
+| 009 | [Prompt tiers](./specs/009-prompt-tiers/) | ✅ done | #58 |
+| 010 | [The TUI](./specs/010-tui/) | ✅ done — see note below | #60, #96, #97, #107, #108, #109, #111, #119, #120, #121, #130, #135, #136, #143 |
+| 011 | [The gateway](./specs/011-gateway/) | ✅ done | #65, #66 |
+| 012 | [Subagents and the archivist](./specs/012-subagents-archivist/) | ✅ done | #81, #82 |
+| 013 | [Multi-provider BYOK routing](./specs/013-multi-provider-byok/) | ✅ done | #71, #73, #75, #76, #77 |
+| 014 | [Event schema + trajectory writer](./specs/014-trajectory-writer/) | ⬜ **next** | — |
+| 015 | [BYOK guided setup + route column](./specs/015-byok-guided-setup/) | ✅ done | #86, #87, #91, #123 |
+| 016 | [Routing of roles](./specs/016-role-routing/) | ⬜ not started | — |
+| 017 | [Distribution](./specs/017-distribution/) | ⬜ **release gate — v0.1.0** | — |
+| 018 | [Daemon](./specs/018-daemon/) | ⬜ post-release | — |
+| 019 | [OS sandbox upgrade tier](./specs/019-os-sandbox/) | ⬜ post-release | — |
+| 020 | [Extensibility](./specs/020-extensibility/) | ⬜ post-release | — |
+| 021 | [Trajectory learning + `POLICY.md`](./specs/021-trajectory-learning/) | ⬜ post-release | — |
+| 022 | [Hosted gateway](./specs/022-hosted-gateway/) | ✅ done | #122, #123 |
+| 023 | [Gateway rate limiting](./specs/023-gateway-rate-limiting/) | 🟡 research approved, not built | — |
 
-**Stage D is next** (reprioritized ahead of 7b, 2026-08-12) — BYOK guided first-run setup + the
-`/model` gateway route-column interface, see "Remaining, in execution order" above. **Stage 7b
-follows it** — architect/editor role split, oracle escalation. It reuses Stage 6's dispatch
-machinery directly (the oracle *is* a subagent), so nothing new needs to be built to route to it.
+**How this table was reconciled (2026-08-21):** mechanically, from `git log` merges #17–#146 and the
+`STATE.md` of each loop under `.claude/loops/_archive/`. The previous roadmap had last been
+reconciled on 2026-08-11 and was ~44 merged PRs behind. Rows marked done are backed by a merged PR
+or, for the pre-PR stages, by the old build plan's own "done" marker. Treat a row that looks wrong
+as a reconciliation miss rather than a decision.
 
-Two smaller, independently-scoped threads are also still open and can be picked up separately: Groq
-removal (scoped in conversation 2026-08-10, never run as a loop — seri is moving off Groq as a
-provider now that OpenRouter reaches the same models) and the hosted gateway (Phase B, above). A
-third, newer thread — evaluating Vercel AI Gateway as a second BYOK gateway alongside OpenRouter,
-and whether it changes the case for keeping the native Anthropic/OpenAI/Google integrations as
-separate code paths (surfaced in conversation 2026-08-11) — is not yet scoped as a loop.
+**Note on 010.** The TUI shipped inline and append-only (#60), and was then **reversed** on
+2026-08-16 to full-screen alternate-buffer rendering with a scrollable transcript (#119/#120/#121).
+The build plan argued at length for the inline choice; that argument is now superseded. The
+reversal deserves its own ADR — see [`decisions/README.md`](./decisions/README.md), "Not yet
+written up as ADRs".
+
+## Execution order
+
+```
+014 → 016 → 017  (v0.1.0 ships)  →  018 → 019 → 020
+                                          ↑
+                                   021 lands on 018's SQLite/FTS5 store
+```
+
+| Next | Spec | Why here |
+|---|---|---|
+| 1 | **014 — event schema + trajectory writer** | Additive, no model in the path, depends on nothing. Every stage that lands uninstrumented is corpus that can never be recovered — sessions that already happened cannot be retroactively instrumented. Same "cheap strictly because it is early" argument as 008 and 009. |
+| 2 | **016 — routing of roles** | Architect/editor split, oracle escalation. Reuses 012's dispatch machinery directly — the oracle *is* a subagent — so nothing new is built to route to it. |
+| 3 | **017 — distribution** | **Release gate. v0.1.0 ships here**, after 016 and with the gateway, subagents and role routing in it. |
+| 4 | 018, 019, 020 | Post-release. Each adds capability to a product that already exists rather than being a condition for it existing. |
+| 5 | 021 | Post-release, after 018 — it needs the same SQLite/FTS5 store, and the build plan already recorded the reason not to migrate session storage twice. |
+
+**023 is independently schedulable.** Rate limiting sits on 022, which shipped; it does not gate
+the release and nothing above waits on it.
 
 ## Open items that gate work below
 
 | Item | Gates |
 |---|---|
-| Unattended permission surface | **Blocks scheduled runs** in Stage 8. Decide before the scheduler exists. Also gates `/evolve` (12d) — promotion of a policy line needs a human, so `/evolve` stays interactive-only until this is settled |
-| Trajectory retention + off-machine consent | **Blocks 12a's writer.** Retention window, record-time truncation, and the explicit consent moment before `/evolve` sends a corpus to a third-party model. Easier to pick before the data exists |
-| Archivist token cost | **Partially answered**: one real live-e2e sample measured ~4.4k input / ~0.5k output tokens (~$0.001 on Groq) per archivist run. Not yet a broad enough sample to fully close this — a `/memory archivist off` toggle exists as the immediate mitigation if cost proves material at scale |
-| Code signing, license, repo visibility | Before first public release |
+| **Unattended permission surface** — what a run with no human present may do | **Blocks the scheduler in 018.** Decide before the scheduler exists, not after. Also gates `/evolve` in 021: promoting a policy line needs a human. Neither `--dangerously-skip-permissions` (attended-only by construction, never written back to the session) nor the permanent allowlist at `<configDir>/permissions.yaml` is an answer — every entry in that file was written by a human answering a live prompt in a run they were watching, which is consent for that run, not standing consent for one on a timer. |
+| **Trajectory retention + off-machine consent** | **Blocks 014's writer.** Retention window, record-time truncation, and the explicit consent moment before a corpus is sent to a third-party model — which is the "never transmit user code without opt-in" anti-pattern arriving through a new door. Far easier to pick before the data exists. |
+| **Archivist token cost** | **Partially answered.** One live sample measured ~4.4k input / ~0.5k output tokens (~$0.001) per archivist run. Not a broad enough sample to close it; `/memory archivist off` exists as the immediate mitigation if cost proves material at scale. |
+| **Code signing, license** | Before first public release (017). Apple notarization, Windows Authenticode. Not needed for `curl \| sh`; needed for broad adoption. |
+
+## Threads open but not scheduled
+
+- **Groq removal.** Scoped in conversation 2026-08-10, never run as a loop — seri is moving off Groq
+  now that OpenRouter reaches the same models.
+- **The monorepo split.** `apps/cli` wants to be public; `apps/server`, `apps/portal` and
+  `supabase/` are business logic that should not share a public history with it. Scratch doc at the
+  repo root, untracked.
+- **Vercel AI Gateway as a second BYOK gateway** alongside OpenRouter, and whether it changes the
+  case for keeping the native Anthropic/OpenAI/Google integrations as separate code paths. Surfaced
+  2026-08-11, not scoped as a loop.
+
+---
+
+*This file replaces the former `docs/ROADMAP.md` and `docs/BUILD-PLAN.md`, merged on 2026-08-21.
+Both originals are preserved verbatim under [`_archive/`](./_archive/); every section of both has a
+named destination, listed in [`_archive/README.md`](./_archive/README.md).*

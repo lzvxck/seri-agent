@@ -1,13 +1,14 @@
 # seri — monochrome
 
-A monochrome palette and type system for the full-screen terminal UI, carried over from three
-references and reduced to two colors: Anthropic's near-black/cream pair (`docs/DESIGN.md`),
-Vercel's structural precision, and opencode's terminal density. Published as an artifact first
-(interactive preview, kept for reference) before porting into the TUI itself.
+A monochrome palette and type system for the full-screen terminal UI: seri's own
+near-black/canvas pair ([`tokens.md`](./tokens.md)) reduced to what a terminal can render,
+with structural precision and terminal density carried over from two references (Vercel and
+opencode respectively). Published as an artifact first (interactive preview, kept for
+reference) before porting into the TUI itself.
 
 ## Palette — two colors, inverted, not four
 
-`docs/DESIGN.md` already states the rule for the web surfaces: paper and ink are a pair, not a
+[`tokens.md`](./tokens.md) already states the rule for the web surfaces: paper and ink are a pair, not a
 hierarchy — the same two colors read backwards make the other mode. The TUI needs nothing more
 than that. Dark mode isn't a second palette; it's the identical pair with the roles swapped, the
 same thing `altScreen.ts` already does to the whole terminal on entry and reverses on exit.

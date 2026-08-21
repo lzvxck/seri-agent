@@ -1,5 +1,5 @@
 /*
- * Design tokens — transcribed from docs/DESIGN.md frontmatter.
+ * Design tokens — transcribed from docs/design/tokens.md frontmatter.
  * These values are the spec, not preferences.
  */
 :root {
@@ -328,7 +328,7 @@
    *
    * What "reduce" asks for is the removal of vestibular triggers — translation, scale,
    * parallax, looping motion. Opacity is not one of them, and a cross-fade is the standard
-   * substitute. So everything below fades in place, at the 100ms DESIGN.md's accessibility
+   * substitute. So everything below fades in place, at the 100ms docs/design/tokens.md's accessibility
    * section names for this case, on a compressed stagger that finishes in ~400ms instead
    * of 2.2s. Nothing moves, nothing loops, and nothing snaps.
    *

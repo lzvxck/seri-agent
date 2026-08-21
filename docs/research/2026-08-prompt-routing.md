@@ -56,7 +56,7 @@ already exists, which is the same argument Stage 7a's own text makes about the r
 ## What we do in the meantime
 
 One prompt for everyone, containing the enforcement instruction that the measured failure calls for.
-The content is the **stable tier** in `BUILD-PLAN.md`'s Stage B2 sense, so none of it is thrown away
+The content is the **stable tier** in [`../specs/009-prompt-tiers/spec.md`](../specs/009-prompt-tiers/spec.md)'s sense, so none of it is thrown away
 when tiers land — B2 splits where it sits, not what it says.
 
 One section will have no equivalent in either reference, because no other harness has it: seri's
@@ -141,7 +141,7 @@ model, that it is a quota rather than a fault, roughly when it clears, and that 
 somewhere else. This is a change to `loop.ts`'s error path plus a line in `cli/output.ts`, and it
 needs no model metadata at all.
 
-**With the catalog, at 7a.** `ARCHITECTURE.md`'s breadth tier is an OpenRouter-style router behind
+**With the catalog, at 7a.** [`../ARCHITECTURE.md`](../ARCHITECTURE.md)'s breadth tier is an OpenRouter-style router behind
 one OpenAI-compatible endpoint, and what it buys *for this problem specifically* is upstream
 fallback: a 429 on one provider can route to another automatically, turning a run-ending error into
 a latency blip. That is the single most valuable property of the breadth tier for rate limits, and
