@@ -909,7 +909,11 @@ describe("handlePost — rate limiting", () => {
     expect(await response.json()).toEqual({ code: "concurrency_limit" });
   });
 
-  test("a successful Free streaming request releases its concurrency claim after completion", async () => {
+  // Asserts ORDER, not just occurrence: a release that fired at handlePost's return (TTFB)
+  // rather than at stream completion would still make the final `toEqual(["user_1"])` pass, so
+  // the first assertion — taken before the body is drained — is the one that actually catches
+  // that regression.
+  test("a successful Free streaming request releases its concurrency claim only once the stream drains, not at handlePost's return", async () => {
     const sseBody = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{}}]}\n\n'));
@@ -932,6 +936,8 @@ describe("handlePost — rate limiting", () => {
         fetchFn,
       }),
     );
+    expect(activeRequestsDeletes).toEqual([]);
+
     await response.text();
 
     expect(activeRequestsDeletes).toEqual(["user_1"]);
