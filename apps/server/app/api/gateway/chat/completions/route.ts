@@ -78,7 +78,7 @@ async function debitBucket(
 // the synchronous `finally` around the block that builds this Response, which fires at TTFB.
 function releaseOnStreamDrain(
   body: ReadableStream<Uint8Array>,
-  release: () => Promise<unknown>,
+  release: () => PromiseLike<unknown>,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let released = false;
