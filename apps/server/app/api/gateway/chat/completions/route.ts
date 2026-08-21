@@ -68,6 +68,44 @@ async function debitBucket(
     : null;
 }
 
+// Wraps a streamed response body so `release` fires when the stream actually finishes draining
+// — the reader hitting `done`, the reader erroring, or the downstream consumer cancelling (a
+// client disconnect mid-stream) — rather than when the Response object carrying this body is
+// merely constructed. `pull`/`cancel` run after Next.js has started consuming the body, unlike
+// the synchronous `finally` around the block that builds this Response, which fires at TTFB.
+function releaseOnStreamDrain(
+  body: ReadableStream<Uint8Array>,
+  release: () => Promise<unknown>,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let released = false;
+  const releaseOnce = () => {
+    if (released) return Promise.resolve();
+    released = true;
+    return release();
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          await releaseOnce();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+        await releaseOnce();
+      }
+    },
+    async cancel(reason) {
+      await releaseOnce();
+      await reader.cancel(reason);
+    },
+  });
+}
+
 function rateLimitedResponse(
   code: "user_rate_limited" | "global_rate_limited" | "concurrency_limit",
   remaining: number,
@@ -219,9 +257,10 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     }
   }
 
-  // Free's max_parallel_requests=1 control. Released explicitly (in the finally block below) on
-  // every exit rather than left to claim_concurrency_slot's stale-reclaim TTL alone, so a Free
-  // user's own next request is never blocked by their just-finished one.
+  // Free's max_parallel_requests=1 control. Released explicitly on every exit — the finally
+  // block below for every non-streaming exit, or releaseOnStreamDrain above once a streamed
+  // body actually finishes — rather than left to claim_concurrency_slot's stale-reclaim TTL
+  // alone, so a Free user's own next request is never blocked by their just-finished one.
   let claimedConcurrencySlot = false;
   if (plan === "free") {
     const { data: claimed } = await supabase.rpc("claim_concurrency_slot", {
@@ -315,7 +354,19 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
         // itself never throws, only logs.
         after(() => updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId)));
       });
-      return new Response(upstream.body.pipeThrough(usageTap), {
+      const tapped = upstream.body.pipeThrough(usageTap);
+      // The Free concurrency slot is released when this streamed body actually drains, not by
+      // the outer finally below — that finally fires as soon as this Response is constructed
+      // (TTFB), long before a real generation finishes streaming. claimedConcurrencySlot is
+      // cleared here so the outer finally does not also try to release it.
+      const releaseSlot = claimedConcurrencySlot;
+      claimedConcurrencySlot = false;
+      const body = releaseSlot
+        ? releaseOnStreamDrain(tapped, () =>
+            supabase.from("active_requests").delete().eq("workos_user_id", identity.userId),
+          )
+        : tapped;
+      return new Response(body, {
         status: upstream.status,
         headers: forwardableHeaders(upstream.headers),
       });
