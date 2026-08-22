@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleGet } from "../app/api/gateway/account-status/route";
-import type { AccountForToken } from "../lib/accountStatus";
+import { fakeIdentity, fakePolarWith, identityStub } from "./fakeSupabase";
 
 /*
  * handleGet-level tests, injecting every dependency the route resolves via RouteDeps — same
@@ -10,21 +10,6 @@ import type { AccountForToken } from "../lib/accountStatus";
  * chat/completions/route.ts, but readEntitlement (not resolveEntitlement) for the plan lookup —
  * this route must never provision anything (see the dedicated describe block below).
  */
-
-function fakePolarWith(activeSubscriptions: { id: string; productId: string }[]) {
-  const client = {
-    customers: { getStateExternal: () => Promise.resolve({ activeSubscriptions }) },
-  };
-  return client as unknown as Polar;
-}
-
-function fakeIdentity(overrides: Partial<AccountForToken> = {}): AccountForToken {
-  return { userId: "user_1", email: "a@example.com", plan: null, status: null, ...overrides };
-}
-
-function identityStub(identity: AccountForToken | null) {
-  return async () => identity;
-}
 
 function accountStatusRequest(headers: Record<string, string> = {}): Request {
   return new Request("http://localhost/api/gateway/account-status", {
