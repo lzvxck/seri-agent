@@ -15,12 +15,7 @@ import {
 } from "../../../../../lib/entitlement";
 import { getPolarClient } from "../../../../../lib/polar";
 import { decidePreflight, provisionalRow, usageUpdate } from "../../../../../lib/quota";
-import {
-  type BucketCheck,
-  bucketsFor,
-  claimConcurrencySlot,
-  debitBucket,
-} from "../../../../../lib/rateLimit";
+import { bucketsFor, claimConcurrencySlot, debitBucket } from "../../../../../lib/rateLimit";
 import { createUsageTap, forwardableHeaders } from "../../../../../lib/streamUsage";
 import { getSupabaseClient } from "../../../../../lib/supabase";
 import { insertUsageEvent, updateUsageEvent } from "../../../../../lib/usageLedger";
@@ -185,21 +180,15 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
 
   // Cheapest/most-final-first, so a request that will be rejected on rate never claims a
   // concurrency slot it would then have to release — see bucketsFor's own comment for the
-  // per-user-then-global ordering and why the global checks aren't gated on plan.
-  //
-  // `debited` tracks every bucket this request has already spent a token from. If a later gate in
-  // this same request refuses — another bucket below, or the concurrency claim further down —
-  // every bucket already debited here gets refunded via a negative-cost debitBucket call.
-  // Otherwise a request that clears its own per-user bucket but then fails, say, the shared day
-  // bucket would leave that per-user token spent for an attempt that never reached OpenRouter.
-  const debited: BucketCheck[] = [];
+  // per-user-then-global ordering and why the global checks aren't gated on plan. A token spent on
+  // a gate a later gate then refuses is not refunded — same posture as the provisional
+  // usage_events row below, which counts a request as an attempt even if it never reaches
+  // OpenRouter, rather than trying to unwind spend across two more RPC round-trips per refusal.
   for (const check of bucketsFor(identity.userId, plan, modelId)) {
     const result = await debitBucket(supabase, check.key, check.config);
     if (!result.allowed) {
-      await Promise.all(debited.map((spent) => debitBucket(supabase, spent.key, spent.config, -1)));
       return rateLimitedResponse(check.responseCode, result.remaining, result.retryAfterSeconds);
     }
-    debited.push(check);
   }
 
   // Free's max_parallel_requests=1 control. `release` is non-null only for a successful Free
@@ -213,7 +202,6 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   if (plan === "free") {
     const claim = await claimConcurrencySlot(supabase, identity.userId);
     if (!claim.allowed) {
-      await Promise.all(debited.map((spent) => debitBucket(supabase, spent.key, spent.config, -1)));
       return rateLimitedResponse("concurrency_limit", 0, 5);
     }
     release = claim.release;

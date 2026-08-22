@@ -49,8 +49,13 @@ export const GLOBAL_FREE_DAY_BUCKET_KEY = "global:free:day";
 // release closure below, not the primary release path — see
 // supabase/migrations/20260821130000_active_requests.sql's own comment for why this must sit
 // comfortably above realistic max stream duration.
+//
+// Rounded: claim_concurrency_slot's p_stale_after_seconds is a Postgres `int`, which rejects a
+// fractional value outright — resolveRateLimit's own parser allows one (e.g. an operator typo, or
+// a value copied from a burst/rate env var's fractional convention), which would otherwise error
+// the RPC and silently fail open, disabling Free-tier concurrency limiting entirely.
 export function resolveConcurrencyStaleSeconds(raw: string | undefined): number {
-  return resolveRateLimit(raw, 300);
+  return Math.round(resolveRateLimit(raw, 300));
 }
 
 export const CONCURRENCY_STALE_SECONDS = resolveConcurrencyStaleSeconds(
@@ -88,12 +93,22 @@ async function callRpcFailOpen<T>(
   fn: string,
   args: Record<string, unknown>,
 ): Promise<RpcOutcome<T>> {
-  const { data, error } = await supabase.rpc(fn, args);
-  if (error) {
-    console.error(`${fn} failed:`, error);
+  // Caught, not just checked on the resolved {error} field: a network-level failure (connection
+  // refused, DNS failure, a timeout aborting the underlying fetch) rejects the promise itself
+  // rather than resolving to {data: null, error: {...}} — without this, that class of failure
+  // would propagate out of debitBucket/claimConcurrencySlot as an uncaught rejection instead of
+  // the fail-open result both callers are written to expect.
+  try {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) {
+      console.error(`${fn} failed:`, error);
+      return { ok: false };
+    }
+    return { ok: true, data: data as T };
+  } catch (error) {
+    console.error(`${fn} threw:`, error);
     return { ok: false };
   }
-  return { ok: true, data: data as T };
 }
 
 // debit_bucket's row shape, exported so the test fake constructing one (routeTestFakes.ts) is
@@ -107,21 +122,16 @@ export type DebitBucketRow = { allowed: boolean; remaining: number; retry_after_
 // additive control layered in front of the quota checks in quota.ts, not the last line of
 // defense, so a rate-limit-store hiccup fails open rather than 429ing every gateway request on
 // top of it.
-//
-// `cost` defaults to 1 (a normal debit); a negative cost is how a caller refunds tokens it
-// already spent on this same bucket for a request that later failed a different gate — see
-// route.ts's own use of this for why that matters here specifically.
 export async function debitBucket(
   supabase: SupabaseClient,
   bucketKey: string,
   cfg: BucketConfig,
-  cost = 1,
 ): Promise<BucketResult> {
   const result = await callRpcFailOpen<DebitBucketRow[]>(supabase, "debit_bucket", {
     p_bucket_key: bucketKey,
     p_capacity: cfg.burst,
     p_refill_rate: cfg.ratePerMin / 60,
-    p_cost: cost,
+    p_cost: 1,
   });
   const row = result.ok ? result.data?.[0] : undefined;
   return row
@@ -196,12 +206,10 @@ export async function claimConcurrencySlot(
   if (claimedAt === null) {
     return { allowed: false, release: null };
   }
-  // `released` guards against a second DELETE once the first one has actually confirmed the row
-  // is gone — not against a second attempt in general. Marking it released before the DELETE
-  // resolves would make a failed release permanent: nothing else in route.ts retries it, so an
-  // errored delete would leak the claim until CONCURRENCY_STALE_SECONDS reclaims it instead of
-  // the caller's own next release attempt (e.g. releaseOnStreamDrain's cancel path, called after
-  // its pull path already tried and failed) being able to retry.
+  // `released` is set only once the DELETE has actually confirmed the row is gone, not before —
+  // marking it released on a failed DELETE would make that failure permanent, since nothing else
+  // in this closure would ever attempt it again, leaving the claim held until
+  // CONCURRENCY_STALE_SECONDS reclaims it instead of a real DELETE ever clearing it.
   let released = false;
   return {
     allowed: true,

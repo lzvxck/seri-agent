@@ -132,10 +132,11 @@ describe("handlePost — rate limiting", () => {
   });
 
   // The per-user bucket already spent a token by the time the day bucket (checked before the
-  // minute bucket — see bucketsFor's own comment) refuses. Without a refund that token would be
-  // gone for an attempt that never reached OpenRouter — see debitBucket's own comment for why a
-  // negative-cost debit_bucket call is the refund mechanism.
-  test("a global bucket refusing refunds every bucket this request already debited", async () => {
+  // minute bucket — see bucketsFor's own comment) refuses. That token is deliberately NOT
+  // refunded — same posture as the provisional usage_events row, which counts a request as an
+  // attempt even if it never reaches OpenRouter — so only the two debit calls that actually ran
+  // should appear, with no compensating negative-cost call.
+  test("a global bucket refusing does not refund the per-user bucket already debited", async () => {
     const fetchFn = neverFetch();
     const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({
       count: 0,
@@ -157,17 +158,17 @@ describe("handlePost — rate limiting", () => {
     expect(response.status).toBe(429);
     expect(await response.json()).toEqual({ code: "global_rate_limited" });
     const debitCalls = rpcCalls.filter((call) => call.name === "debit_bucket");
-    // user:user_1:free debited (spent), then global:free:day debited and refused, then
-    // user:user_1:free refunded — global:free:min is never reached.
+    // user:user_1:free debited, then global:free:day debited and refused — global:free:min is
+    // never reached, and nothing refunds the already-spent user:user_1:free token.
     expect(debitCalls.map((call) => [call.args.p_bucket_key, call.args.p_cost])).toEqual([
       ["user:user_1:free", 1],
       ["global:free:day", 1],
-      ["user:user_1:free", -1],
     ]);
   });
 
-  // Every bucket check the concurrency claim followed must be refunded too, not just the last one.
-  test("the concurrency claim refusing refunds both the per-user and global buckets already debited", async () => {
+  // Same posture for the concurrency claim: buckets already debited before the claim is refused
+  // stay spent.
+  test("the concurrency claim refusing does not refund the buckets already debited", async () => {
     const fetchFn = neverFetch();
     const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({
       count: 0,
@@ -185,10 +186,9 @@ describe("handlePost — rate limiting", () => {
 
     expect(response.status).toBe(429);
     expect(await response.json()).toEqual({ code: "concurrency_limit" });
-    const refunds = rpcCalls.filter(
-      (call) => call.name === "debit_bucket" && call.args.p_cost === -1,
-    );
-    expect(refunds.map((call) => call.args.p_bucket_key).sort()).toEqual(
+    const debitCalls = rpcCalls.filter((call) => call.name === "debit_bucket");
+    expect(debitCalls.every((call) => call.args.p_cost === 1)).toBe(true);
+    expect(debitCalls.map((call) => call.args.p_bucket_key).sort()).toEqual(
       ["global:free:day", "global:free:min", "user:user_1:free"].sort(),
     );
   });

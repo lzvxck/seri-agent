@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   bucketsFor,
   claimConcurrencySlot,
+  debitBucket,
   FREE_BUCKET,
   GLOBAL_FREE_DAY_BUCKET,
   GLOBAL_FREE_DAY_BUCKET_KEY,
@@ -57,6 +58,11 @@ describe("resolveConcurrencyStaleSeconds", () => {
 
   test("parses an override", () => {
     expect(resolveConcurrencyStaleSeconds("60")).toBe(60);
+  });
+
+  // p_stale_after_seconds is a Postgres `int` — a fractional value would error the RPC outright.
+  test("rounds a fractional override to an integer", () => {
+    expect(resolveConcurrencyStaleSeconds("150.5")).toBe(151);
   });
 });
 
@@ -120,6 +126,23 @@ describe("bucketsFor", () => {
     expect(bucketsFor("user_1", "free", "stealth/ox-alpha")).toEqual([
       { key: "user:user_1:free", config: FREE_BUCKET, responseCode: "user_rate_limited" },
     ]);
+  });
+});
+
+describe("debitBucket", () => {
+  // A rejected supabase.rpc() promise (connection refused, DNS failure, an aborted underlying
+  // fetch) is a different failure shape than a resolved {error} — without catching it, it would
+  // propagate out of the route's bucket-check loop as an uncaught 500 instead of the documented
+  // fail-open posture every other RPC-error case here already gets.
+  test("an rpc() rejection fails open instead of throwing", async () => {
+    const supabase = { rpc: () => Promise.reject(new Error("network unreachable")) };
+
+    const result = await debitBucket(supabase as unknown as SupabaseClient, "user:user_1:free", {
+      burst: 3,
+      ratePerMin: 2,
+    });
+
+    expect(result).toEqual({ allowed: true, remaining: 3, retryAfterSeconds: 0 });
   });
 });
 
