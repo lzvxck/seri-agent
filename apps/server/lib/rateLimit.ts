@@ -1,18 +1,9 @@
 import type { Plan } from "@seri/plans";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { resolveNonNegativeNumber } from "./env";
 
-// `Number(x) || fallback` would silently turn an explicit "0" override into fallback — 0 is
-// falsy in JS — making a deliberately-zeroed rate/burst (the natural negative-control value)
-// impossible to set. `Number("")` is 0 too (a blank env assignment reads as an empty string,
-// not undefined), so blank is checked explicitly rather than relying on Number.isFinite to
-// catch it — and a negative override is clamped to 0 rather than trusted, since debit_bucket's
-// arithmetic would otherwise treat a negative capacity/rate as a bucket that never allows
-// anything through, or worse, refills backwards. Mirrors quota.ts's resolveDailyCap exactly.
 export function resolveRateLimit(raw: string | undefined, fallback: number): number {
-  const trimmed = raw?.trim();
-  if (!trimmed) return fallback;
-  const n = Number(trimmed);
-  return Number.isFinite(n) ? Math.max(0, n) : fallback;
+  return resolveNonNegativeNumber(raw, fallback);
 }
 
 export type BucketConfig = { burst: number; ratePerMin: number };
