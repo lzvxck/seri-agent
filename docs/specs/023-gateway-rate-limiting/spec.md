@@ -2,8 +2,8 @@
 
 > **State lives in [`ROADMAP.md`](../../ROADMAP.md), not here.**
 >
-> **Research approved, implementation not started.** This is the one spec whose loop is
-> still open — see `.claude/loops/gateway-rate-limiting/`.
+> **Implemented, PR open.** See `.claude/loops/gateway-rate-limiting-impl/` for the loop
+> that produced it (plan, execution, two rounds of independent review).
 
 ---
 
