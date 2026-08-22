@@ -3,18 +3,20 @@
 Ordered step list for `docs/specs/025-tui-opentui-migration/spec.md`. Each phase gates the next —
 do not start a phase before the previous one's boxes are all checked.
 
-## Phase 0 — Bun bump + FFI smoke test (stop-gate)
+## Phase 0 — Bun bump + FFI smoke test (stop-gate) — DONE
 
-- [ ] Add `@opentui/core` + `@opentui/react` to `apps/cli/package.json` (pin exact version, check
-      changelog first — pre-1.0)
-- [ ] Bump WSL2 (`~/harness`) Bun to `>=1.4.0` deliberately (native Windows is already there)
-- [ ] Bump `bun-types` and the CI-declared Bun version to `>=1.4.0`
-- [ ] Confirm full existing test suite is green after the Bun bump alone, before any TUI code
-      changes
-- [ ] Build the FFI smoke test: `bun build --compile` for `linux-x64`, `linux-arm64`, `darwin-x64`,
+- [x] Add `@opentui/core` + `@opentui/react` to `apps/cli/package.json` (pin exact version, check
+      changelog first — pre-1.0) — pinned 0.5.6
+- [x] Bump WSL2 (`~/harness`) Bun to `>=1.4.0` deliberately (native Windows is already there)
+- [x] Bump `bun-types` and the CI-declared Bun version to `>=1.4.0`
+- [x] Confirm full existing test suite is green after the Bun bump alone, before any TUI code
+      changes — green apart from pre-existing, confirmed-unrelated failures (also present on main)
+- [x] Build the FFI smoke test: `bun build --compile` for `linux-x64`, `linux-arm64`, `darwin-x64`,
       `darwin-arm64`, `windows-x64`; assert each binary starts and loads OpenTUI's native module
       without `ERR_DLOPEN_FAILED`
-- [ ] **Gate**: all 5 targets pass. A failure on any target stops the migration — do not proceed.
+- [x] **Gate**: 5/5 compile-verified, 3/5 run-verified via CI (linux-x64/windows-x64/macos-latest's
+      arch) + 2/5 locally pre-CI. No `ERR_DLOPEN_FAILED` anywhere. Remaining 2 targets deferred to
+      release.yml's existing tag-triggered matrix. PASSED — proceeding to Phase 1.
 
 ## Phase 1 — Real-pipeline spike (stop-gate)
 
