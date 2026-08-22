@@ -76,17 +76,20 @@ describe("bucketsFor", () => {
     },
   );
 
-  test("free plan on a `:free`-suffixed model: per-user bucket, then both global buckets", () => {
+  // Day bucket before minute: it's the real binding constraint across a full day (see
+  // GLOBAL_FREE_DAY_BUCKET's own comment), so checking it first means an already-exhausted day
+  // bucket refuses the request before the minute bucket is ever touched.
+  test("free plan on a `:free`-suffixed model: per-user bucket, then day bucket, then minute bucket", () => {
     expect(bucketsFor("user_1", "free", "openai/gpt-oss-120b:free")).toEqual([
       { key: "user:user_1:free", config: FREE_BUCKET, responseCode: "user_rate_limited" },
       {
-        key: GLOBAL_FREE_MIN_BUCKET_KEY,
-        config: GLOBAL_FREE_MIN_BUCKET,
+        key: GLOBAL_FREE_DAY_BUCKET_KEY,
+        config: GLOBAL_FREE_DAY_BUCKET,
         responseCode: "global_rate_limited",
       },
       {
-        key: GLOBAL_FREE_DAY_BUCKET_KEY,
-        config: GLOBAL_FREE_DAY_BUCKET,
+        key: GLOBAL_FREE_MIN_BUCKET_KEY,
+        config: GLOBAL_FREE_MIN_BUCKET,
         responseCode: "global_rate_limited",
       },
     ]);
@@ -99,13 +102,13 @@ describe("bucketsFor", () => {
     expect(bucketsFor("user_1", "pro", "openai/gpt-oss-120b:free")).toEqual([
       { key: "user:user_1:paid", config: PAID_BUCKET, responseCode: "user_rate_limited" },
       {
-        key: GLOBAL_FREE_MIN_BUCKET_KEY,
-        config: GLOBAL_FREE_MIN_BUCKET,
+        key: GLOBAL_FREE_DAY_BUCKET_KEY,
+        config: GLOBAL_FREE_DAY_BUCKET,
         responseCode: "global_rate_limited",
       },
       {
-        key: GLOBAL_FREE_DAY_BUCKET_KEY,
-        config: GLOBAL_FREE_DAY_BUCKET,
+        key: GLOBAL_FREE_MIN_BUCKET_KEY,
+        config: GLOBAL_FREE_MIN_BUCKET,
         responseCode: "global_rate_limited",
       },
     ]);
@@ -144,5 +147,35 @@ describe("claimConcurrencySlot", () => {
 
     console.error = original;
     expect(errors).toEqual([["active_requests release failed:", { message: "delete failed" }]]);
+  });
+
+  // A failed delete must not mark the claim released — otherwise nothing ever retries it, and it
+  // sits claimed until CONCURRENCY_STALE_SECONDS reclaims it instead of the caller's own retry.
+  test("a release error leaves the claim retryable; a later successful call actually deletes", async () => {
+    let deleteCalls = 0;
+    const supabase = {
+      rpc: () => Promise.resolve({ data: "2026-01-01T00:00:00.000Z", error: null }),
+      from: () => ({
+        delete: () => ({
+          eq: () => ({
+            eq: () => {
+              deleteCalls += 1;
+              return deleteCalls === 1
+                ? Promise.resolve({ data: null, error: { message: "delete failed" } })
+                : Promise.resolve({ data: null, error: null });
+            },
+          }),
+        }),
+      }),
+    };
+
+    const claim = await claimConcurrencySlot(supabase as unknown as SupabaseClient, "user_1");
+    await claim.release?.();
+    await claim.release?.();
+    expect(deleteCalls).toBe(2);
+
+    // A third call, after the delete has actually succeeded, must not delete again.
+    await claim.release?.();
+    expect(deleteCalls).toBe(2);
   });
 });

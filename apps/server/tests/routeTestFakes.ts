@@ -2,6 +2,7 @@ import type { Polar } from "@polar-sh/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { after as afterReal } from "next/server";
 import type { AccountForToken } from "../lib/accountStatus";
+import type { DebitBucketRow } from "../lib/rateLimit";
 
 // Shared fakes for handle*-level route tests (gatewayRoute.test.ts, gatewayRateLimit.test.ts,
 // gatewayAccountStatusRoute.test.ts) — previously duplicated verbatim across those files.
@@ -78,10 +79,11 @@ export function fakeUsageSupabaseTracking(
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const activeRequestsDeletes: string[] = [];
   const activeRequestsDeleteCalls: { userId: string; startedAt: unknown }[] = [];
+  const defaultDebitBucketRow: DebitBucketRow = { allowed: true, remaining: 999, retry_after_seconds: 0 };
   const defaultRpcResult = (name: string): { data: unknown; error: unknown } =>
     name === "claim_concurrency_slot"
       ? { data: "2026-01-01T00:00:00.000Z", error: null }
-      : { data: [{ allowed: true, remaining: 999, retry_after_seconds: 0 }], error: null };
+      : { data: [defaultDebitBucketRow], error: null };
   const client = {
     from: (table: string) => {
       if (table === "active_requests") {

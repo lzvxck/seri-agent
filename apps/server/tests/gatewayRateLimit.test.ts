@@ -131,6 +131,68 @@ describe("handlePost — rate limiting", () => {
     expect(rpcCalls.some((call) => call.name === "claim_concurrency_slot")).toBe(false);
   });
 
+  // The per-user bucket already spent a token by the time the day bucket (checked before the
+  // minute bucket — see bucketsFor's own comment) refuses. Without a refund that token would be
+  // gone for an attempt that never reached OpenRouter — see debitBucket's own comment for why a
+  // negative-cost debit_bucket call is the refund mechanism.
+  test("a global bucket refusing refunds every bucket this request already debited", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({
+      count: 0,
+      rpc: (name, args) => {
+        if (name !== "debit_bucket" || args.p_bucket_key !== "global:free:day") return undefined;
+        return { data: [{ allowed: false, remaining: 0, retry_after_seconds: 4 }], error: null };
+      },
+    });
+
+    const response = await withCatalogEntry("openai/gpt-oss-120b:free", () =>
+      handlePost(gatewayRequest({ model: "openai/gpt-oss-120b:free" }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+        fetchFn,
+      }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ code: "global_rate_limited" });
+    const debitCalls = rpcCalls.filter((call) => call.name === "debit_bucket");
+    // user:user_1:free debited (spent), then global:free:day debited and refused, then
+    // user:user_1:free refunded — global:free:min is never reached.
+    expect(debitCalls.map((call) => [call.args.p_bucket_key, call.args.p_cost])).toEqual([
+      ["user:user_1:free", 1],
+      ["global:free:day", 1],
+      ["user:user_1:free", -1],
+    ]);
+  });
+
+  // Every bucket check the concurrency claim followed must be refunded too, not just the last one.
+  test("the concurrency claim refusing refunds both the per-user and global buckets already debited", async () => {
+    const fetchFn = neverFetch();
+    const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({
+      count: 0,
+      rpc: (name) => (name === "claim_concurrency_slot" ? { data: null, error: null } : undefined),
+    });
+
+    const response = await withCatalogEntry("openai/gpt-oss-120b:free", () =>
+      handlePost(gatewayRequest({ model: "openai/gpt-oss-120b:free" }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+        fetchFn,
+      }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ code: "concurrency_limit" });
+    const refunds = rpcCalls.filter(
+      (call) => call.name === "debit_bucket" && call.args.p_cost === -1,
+    );
+    expect(refunds.map((call) => call.args.p_bucket_key).sort()).toEqual(
+      ["global:free:day", "global:free:min", "user:user_1:free"].sort(),
+    );
+  });
+
   // stealth/ox-alpha-shaped: $0-priced but not `:free`-suffixed. Documents the current
   // conservative scope decision (isFreeSuffixed, not isZeroPriceEntry, gates the global bucket)
   // as a checkable behavior — the request still succeeds normally.
@@ -313,6 +375,7 @@ describe("handlePost — rate limiting", () => {
         polar: fakePolarWith([]),
         getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
         fetchFn,
+        after: fakeAfter,
       }),
     );
 

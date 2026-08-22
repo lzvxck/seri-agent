@@ -15,7 +15,12 @@ import {
 } from "../../../../../lib/entitlement";
 import { getPolarClient } from "../../../../../lib/polar";
 import { decidePreflight, provisionalRow, usageUpdate } from "../../../../../lib/quota";
-import { bucketsFor, claimConcurrencySlot, debitBucket } from "../../../../../lib/rateLimit";
+import {
+  type BucketCheck,
+  bucketsFor,
+  claimConcurrencySlot,
+  debitBucket,
+} from "../../../../../lib/rateLimit";
 import { createUsageTap, forwardableHeaders } from "../../../../../lib/streamUsage";
 import { getSupabaseClient } from "../../../../../lib/supabase";
 import { insertUsageEvent, updateUsageEvent } from "../../../../../lib/usageLedger";
@@ -41,34 +46,30 @@ export type RouteDeps = {
 // client disconnect mid-stream) — rather than when the Response object carrying this body is
 // merely constructed. `pull`/`cancel` run after Next.js has started consuming the body, unlike
 // the synchronous `finally` around the block that builds this Response, which fires at TTFB.
+// `release` (claimConcurrencySlot's own closure) is already safe to call more than once — no
+// second guard needed here around it.
 function releaseOnStreamDrain(
   body: ReadableStream<Uint8Array>,
   release: () => Promise<void>,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
-  let released = false;
-  const releaseOnce = () => {
-    if (released) return Promise.resolve();
-    released = true;
-    return release();
-  };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
         if (done) {
-          await releaseOnce();
+          await release();
           controller.close();
           return;
         }
         controller.enqueue(value);
       } catch (error) {
         controller.error(error);
-        await releaseOnce();
+        await release();
       }
     },
     async cancel(reason) {
-      await releaseOnce();
+      await release();
       await reader.cancel(reason);
     },
   });
@@ -185,11 +186,20 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // Cheapest/most-final-first, so a request that will be rejected on rate never claims a
   // concurrency slot it would then have to release — see bucketsFor's own comment for the
   // per-user-then-global ordering and why the global checks aren't gated on plan.
+  //
+  // `debited` tracks every bucket this request has already spent a token from. If a later gate in
+  // this same request refuses — another bucket below, or the concurrency claim further down —
+  // every bucket already debited here gets refunded via a negative-cost debitBucket call.
+  // Otherwise a request that clears its own per-user bucket but then fails, say, the shared day
+  // bucket would leave that per-user token spent for an attempt that never reached OpenRouter.
+  const debited: BucketCheck[] = [];
   for (const check of bucketsFor(identity.userId, plan, modelId)) {
     const result = await debitBucket(supabase, check.key, check.config);
     if (!result.allowed) {
+      await Promise.all(debited.map((spent) => debitBucket(supabase, spent.key, spent.config, -1)));
       return rateLimitedResponse(check.responseCode, result.remaining, result.retryAfterSeconds);
     }
+    debited.push(check);
   }
 
   // Free's max_parallel_requests=1 control. `release` is non-null only for a successful Free
@@ -197,11 +207,13 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // a claim_concurrency_slot RPC error (claimConcurrencySlot's own fail-open posture). Called
   // exactly once per exit path below: the streaming path hands it to releaseOnStreamDrain and
   // nulls this variable so the body actually finishes draining before it fires, rather than at
-  // this function's own TTFB; every other exit calls it directly in the outer finally.
+  // this function's own TTFB; every other exit hands it to after() in the outer finally so
+  // releasing the slot never delays a response that's already fully built.
   let release: (() => Promise<void>) | null = null;
   if (plan === "free") {
     const claim = await claimConcurrencySlot(supabase, identity.userId);
     if (!claim.allowed) {
+      await Promise.all(debited.map((spent) => debitBucket(supabase, spent.key, spent.config, -1)));
       return rateLimitedResponse("concurrency_limit", 0, 5);
     }
     release = claim.release;
@@ -233,10 +245,12 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     // request keeps this row's provisional (zero) cost — full mid-stream cost tracking would need
     // parsing token deltas as they arrive, which this does not do; only the Free-tier request
     // count is guaranteed accurate on abort, not a paid request's exact spend.
-    // insertUsageEvent's row is the only record that this attempt happened at all — if it fails
-    // to write, countRequestsToday/sumSpendThisMonth never learn about this request, so both the
-    // Free daily cap and the paid spend cap would stop enforcing while requests keep spending
-    // Seri's OpenRouter key. Refuse rather than forward when it does.
+    // insertUsageEvent's row is the only record that a request cleared every gate above and this
+    // attempt reached OpenRouter — a refusal from one of those gates is tracked in rate_buckets/
+    // active_requests instead, not here. If this insert fails to write, countRequestsToday/
+    // sumSpendThisMonth never learn about this request, so both the Free daily cap and the paid
+    // spend cap would stop enforcing while requests keep spending Seri's OpenRouter key. Refuse
+    // rather than forward when it does.
     const recorded = await insertUsageEvent(
       supabase,
       provisionalRow({ idempotencyKey, userId: identity.userId, modelId }),
@@ -331,7 +345,11 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
       headers: forwardableHeaders(upstream.headers),
     });
   } finally {
-    await release?.();
+    // Scheduled via after(), not awaited: every path reaching here already has its Response body
+    // fully built, so blocking on this DB round-trip would only add latency the caller never
+    // benefits from. after() keeps the invocation alive long enough for it to land, same as the
+    // usage-ledger writes above.
+    if (release) after(release);
   }
 }
 

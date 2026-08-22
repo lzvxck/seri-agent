@@ -76,6 +76,30 @@ function isFreeSuffixed(modelId: string): boolean {
 
 export type BucketResult = { allowed: boolean; remaining: number; retryAfterSeconds: number };
 
+// Shared by debitBucket and claimConcurrencySlot: both are a bare supabase.rpc() call that logs
+// and fails open on error, previously duplicated verbatim in each. An error and a successful call
+// that legitimately returns no/null data are NOT the same thing to either caller (the latter means
+// "refused", not "fail open"), so this returns a discriminated result instead of collapsing both
+// to `null` — each call site still decides its own fail-open shape from `ok`.
+type RpcOutcome<T> = { ok: true; data: T } | { ok: false };
+
+async function callRpcFailOpen<T>(
+  supabase: SupabaseClient,
+  fn: string,
+  args: Record<string, unknown>,
+): Promise<RpcOutcome<T>> {
+  const { data, error } = await supabase.rpc(fn, args);
+  if (error) {
+    console.error(`${fn} failed:`, error);
+    return { ok: false };
+  }
+  return { ok: true, data: data as T };
+}
+
+// debit_bucket's row shape, exported so the test fake constructing one (routeTestFakes.ts) is
+// type-checked against the same contract, rather than an inline type only debitBucket saw.
+export type DebitBucketRow = { allowed: boolean; remaining: number; retry_after_seconds: number };
+
 // debit_bucket returns table(allowed, remaining, retry_after_seconds) — one row, or none if the
 // bucket_key lookup itself failed. An RPC error or an unexpected/empty result resolves to
 // {allowed: true, ...} here rather than a nullable return, so every call site is a plain
@@ -83,22 +107,23 @@ export type BucketResult = { allowed: boolean; remaining: number; retryAfterSeco
 // additive control layered in front of the quota checks in quota.ts, not the last line of
 // defense, so a rate-limit-store hiccup fails open rather than 429ing every gateway request on
 // top of it.
+//
+// `cost` defaults to 1 (a normal debit); a negative cost is how a caller refunds tokens it
+// already spent on this same bucket for a request that later failed a different gate — see
+// route.ts's own use of this for why that matters here specifically.
 export async function debitBucket(
   supabase: SupabaseClient,
   bucketKey: string,
   cfg: BucketConfig,
+  cost = 1,
 ): Promise<BucketResult> {
-  const { data, error } = await supabase.rpc("debit_bucket", {
+  const result = await callRpcFailOpen<DebitBucketRow[]>(supabase, "debit_bucket", {
     p_bucket_key: bucketKey,
     p_capacity: cfg.burst,
     p_refill_rate: cfg.ratePerMin / 60,
-    p_cost: 1,
+    p_cost: cost,
   });
-  if (error) {
-    console.error("debit_bucket failed:", error);
-  }
-  type Row = { allowed: boolean; remaining: number; retry_after_seconds: number };
-  const row = (data as Row[] | null)?.[0];
+  const row = result.ok ? result.data?.[0] : undefined;
   return row
     ? { allowed: row.allowed, remaining: row.remaining, retryAfterSeconds: row.retry_after_seconds }
     : { allowed: true, remaining: cfg.burst, retryAfterSeconds: 0 };
@@ -123,15 +148,21 @@ export function bucketsFor(userId: string, plan: Plan, modelId: string): BucketC
     },
   ];
   if (isFreeSuffixed(modelId)) {
+    // Day before minute: GLOBAL_FREE_DAY_BUCKET's own comment is why the day bucket is the real
+    // binding constraint across a full day. Checking it first means a request arriving once the
+    // day bucket is already exhausted gets refused there and never reaches the minute bucket —
+    // checking minute first would keep debiting (and thus starving) the minute bucket for every
+    // other Free request for the rest of the day, even though the day check was always going to
+    // refuse this one anyway.
     checks.push(
-      {
-        key: GLOBAL_FREE_MIN_BUCKET_KEY,
-        config: GLOBAL_FREE_MIN_BUCKET,
-        responseCode: "global_rate_limited",
-      },
       {
         key: GLOBAL_FREE_DAY_BUCKET_KEY,
         config: GLOBAL_FREE_DAY_BUCKET,
+        responseCode: "global_rate_limited",
+      },
+      {
+        key: GLOBAL_FREE_MIN_BUCKET_KEY,
+        config: GLOBAL_FREE_MIN_BUCKET,
         responseCode: "global_rate_limited",
       },
     );
@@ -154,23 +185,28 @@ export async function claimConcurrencySlot(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<ConcurrencyClaim> {
-  const { data: claimedAt, error } = await supabase.rpc("claim_concurrency_slot", {
+  const result = await callRpcFailOpen<string | null>(supabase, "claim_concurrency_slot", {
     p_user_id: userId,
     p_stale_after_seconds: CONCURRENCY_STALE_SECONDS,
   });
-  if (error) {
-    console.error("claim_concurrency_slot failed:", error);
+  if (!result.ok) {
     return { allowed: true, release: null };
   }
+  const claimedAt: string | null = result.data;
   if (claimedAt === null) {
     return { allowed: false, release: null };
   }
+  // `released` guards against a second DELETE once the first one has actually confirmed the row
+  // is gone — not against a second attempt in general. Marking it released before the DELETE
+  // resolves would make a failed release permanent: nothing else in route.ts retries it, so an
+  // errored delete would leak the claim until CONCURRENCY_STALE_SECONDS reclaims it instead of
+  // the caller's own next release attempt (e.g. releaseOnStreamDrain's cancel path, called after
+  // its pull path already tried and failed) being able to retry.
   let released = false;
   return {
     allowed: true,
     release: async () => {
       if (released) return;
-      released = true;
       const { error: releaseError } = await supabase
         .from("active_requests")
         .delete()
@@ -178,7 +214,9 @@ export async function claimConcurrencySlot(
         .eq("started_at", claimedAt);
       if (releaseError) {
         console.error("active_requests release failed:", releaseError);
+        return;
       }
+      released = true;
     },
   };
 }
