@@ -7,6 +7,7 @@ import {
   GLOBAL_FREE_MIN_BUCKET,
   GLOBAL_FREE_MIN_BUCKET_KEY,
   PAID_BUCKET,
+  resolveConcurrencyStaleSeconds,
   resolveRateLimit,
 } from "../lib/rateLimit";
 
@@ -43,6 +44,17 @@ describe("resolveRateLimit", () => {
   // Negative passes Number.isFinite, so it needs its own clamp.
   test("clamps a negative override to 0", () => {
     expect(resolveRateLimit("-5", 14)).toBe(0);
+  });
+});
+
+// Same parsing rules as resolveRateLimit (shared implementation), only the fallback differs.
+describe("resolveConcurrencyStaleSeconds", () => {
+  test("falls back to 300 when unset", () => {
+    expect(resolveConcurrencyStaleSeconds(undefined)).toBe(300);
+  });
+
+  test("parses an override", () => {
+    expect(resolveConcurrencyStaleSeconds("60")).toBe(60);
   });
 });
 

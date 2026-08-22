@@ -45,6 +45,18 @@ export const GLOBAL_FREE_DAY_BUCKET: BucketConfig = {
 export const GLOBAL_FREE_MIN_BUCKET_KEY = "global:free:min";
 export const GLOBAL_FREE_DAY_BUCKET_KEY = "global:free:day";
 
+// Safety net for a crashed/killed invocation that never reaches claimConcurrencySlot's own
+// release closure below, not the primary release path — see
+// supabase/migrations/20260821130000_active_requests.sql's own comment for why this must sit
+// comfortably above realistic max stream duration.
+export function resolveConcurrencyStaleSeconds(raw: string | undefined): number {
+  return resolveRateLimit(raw, 300);
+}
+
+export const CONCURRENCY_STALE_SECONDS = resolveConcurrencyStaleSeconds(
+  process.env.SERI_CONCURRENCY_STALE_SECONDS,
+);
+
 // Only "free" and "paid" are rate-limit-relevant buckets — every non-free Plan (pro/max/ultra)
 // shares one "paid" bucket key, since the per-user rate/burst numbers above don't vary by paid
 // tier (only the existing monthly $ allowance in quota.ts does). Private: only bucketsFor below
@@ -144,6 +156,7 @@ export async function claimConcurrencySlot(
 ): Promise<ConcurrencyClaim> {
   const { data: claimedAt, error } = await supabase.rpc("claim_concurrency_slot", {
     p_user_id: userId,
+    p_stale_after_seconds: CONCURRENCY_STALE_SECONDS,
   });
   if (error) {
     console.error("claim_concurrency_slot failed:", error);

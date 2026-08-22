@@ -292,7 +292,11 @@ still-streaming request's slot be stolen by a concurrent retry for the same user
 original request ever finishes, and both this default and the returned `started_at` exist to
 close that gap: it is a safety net for a crashed/killed invocation (Vercel tearing down mid-
 stream) that never reaches its release, not the primary release path — see below for why the
-primary path must still be an explicit release scoped to the exact claim it made.
+primary path must still be an explicit release scoped to the exact claim it made. The 300s
+default is env-overridable via `SERI_CONCURRENCY_STALE_SECONDS` (`apps/server/lib/rateLimit.ts`'s
+`CONCURRENCY_STALE_SECONDS`), same pattern as the bucket capacities/rates below — the route
+passes it explicitly as `p_stale_after_seconds` on every `claim_concurrency_slot` call rather than
+relying on the SQL function's own default.
 
 Release (plain delete, no RPC — a single `DELETE` needs no additional atomicity), scoped to BOTH
 the user id and the exact `started_at` this request's own claim returned — not `workos_user_id`
