@@ -62,7 +62,7 @@ permanent, not transitional. Read it whenever an older document names a stage.
 | 022 | [Hosted gateway](./specs/022-hosted-gateway/) | ✅ done | #122, #123 |
 | 023 | [Gateway rate limiting](./specs/023-gateway-rate-limiting/) | 🟡 implemented, PR open | #148 |
 | 024 | [TUI `/clear` command](./specs/024-tui-clear/) | 🟡 built, PR open | #149 |
-| 025 | [TUI: migrate Ink → OpenTUI](./specs/025-tui-opentui-migration/) | ⬜ research spec only, not started | — |
+| 025 | [TUI: migrate Ink → OpenTUI](./specs/025-tui-opentui-migration/) | 🟡 Phases 0–3 done, Phase 4 verification in progress, PR open | #153 |
 
 **How this table was reconciled (2026-08-21):** mechanically, from `git log` merges #17–#146 and the
 `STATE.md` of each loop under `.claude/loops/_archive/`. The previous roadmap had last been

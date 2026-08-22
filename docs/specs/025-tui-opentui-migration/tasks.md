@@ -122,4 +122,4 @@ do not start a phase before the previous one's boxes are all checked.
       clipping) do not reproduce against the real ported pipeline and every panel
 - [ ] `lint`/`typecheck` clean, `git status` clean
 - [ ] reviewer-verifier pass, no CRITICAL/HIGH findings
-- [ ] Update `docs/ROADMAP.md` row 025 with implementation state and PR number
+- [x] Update `docs/ROADMAP.md` row 025 with implementation state and PR number
