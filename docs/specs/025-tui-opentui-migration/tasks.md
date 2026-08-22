@@ -38,37 +38,47 @@ do not start a phase before the previous one's boxes are all checked.
       specifically (not the rejected native `<input>`) is unverified -- Phase 2 must test before
       dropping PR #135's throttle logic.
 
-## Phase 2 — Core rewrite + module reorganization
+## Phase 2 — Core rewrite + module reorganization — DONE
 
-- [ ] Create the new `apps/cli/src/tui/` layout: `runtime/`, `ui/`, `components/`,
+- [x] Create the new `apps/cli/src/tui/` layout: `runtime/`, `ui/`, `components/`,
       `routes/setup/`, `routes/config/`, `hooks/`, `state/`, `theme/`, `util/`
-- [ ] Rewrite `app.tsx` (root shell): `<scrollbox>`-based transcript, one consolidated renderer
-      (Decision 1), `useBoxMetrics` resolution from Phase 1, drop `height={rows-1}` workaround if
-      confirmed unneeded
-- [ ] Rewrite `components/InputBox.tsx` per Phase 1's finding
-- [ ] Port `components/ModelPicker.tsx`, re-test the Yoga `flexShrink` workaround against
-      OpenTUI's layout engine
-- [ ] Port `components/ApprovalBox.tsx`
-- [ ] Rewrite/port `routes/setup/`: `welcomeSplash.ts`, `guidedSetup.ts`, `SetupPanel.tsx`,
-      `WelcomeSplash.tsx`
-- [ ] Port `routes/config/`: `ConfigPanel.tsx`, `PermissionsPanel.tsx`, `AuthPanel.tsx`
-- [ ] Move + port `hooks/useListWindow.ts` (swap `useWindowSize` for OpenTUI's
-      `useTerminalDimensions`/`useOnResize`)
-- [ ] Move `state/reducer.ts`, `state/commands.ts`, `state/handlers.ts` — zero content change,
-      confirm zero-Ink/React-import property still holds
-- [ ] Move + adapt `util/format.ts` to feed the new `<scrollbox>` viewport
-- [ ] Verify + move `theme/theme.ts` — confirm OpenTUI's color-prop shapes accept ANSI-16 names
-      and the `userBg` hex value; apply Design conformance constraints (no accent hue, `userBg`
-      hex exception preserved)
-- [ ] Split `components.tsx` into `ui/ErrorLine.tsx`, `ui/WarningBox.tsx`, `ui/ConfirmPrompt.tsx`,
+- [x] Rewrite `app.tsx` (root shell): consolidated to ONE `createCliRenderer` instance
+      (Decision 1); transcript kept the reducer's existing windowed-slice contract rather than
+      `<scrollbox>` full-content mode (avoids two competing scroll-position sources of truth --
+      documented deviation, `onSizeChange` used as the `useBoxMetrics` replacement)
+- [x] Rewrite `components/InputBox.tsx` per Phase 1's finding (hand-rolled, `useKeyboard`+`usePaste`)
+- [x] Port `components/ModelPicker.tsx` -- Yoga `flexShrink` bug did NOT reproduce under OpenTUI,
+      workaround dropped; found+fixed a different real OpenTUI bug instead (`<text truncate>`
+      renders blank when content spans >1 child and overflows -- fixed at `ui/ListRow.tsx`)
+- [x] Port `components/ApprovalBox.tsx`
+- [x] Rewrite/port `routes/setup/`: `welcomeSplash.ts`, `guidedSetup.ts`, `SetupPanel.tsx`,
+      `WelcomeSplashPanel.tsx` (renamed from `WelcomeSplash.tsx`, NTFS case-collision with
+      sibling `welcomeSplash.ts`)
+- [x] Port `routes/config/`: `ConfigPanel.tsx`, `PermissionsPanel.tsx`, `AuthPanel.tsx`
+- [x] Move + port `hooks/useListWindow.ts` (`useWindowSize` -> `useTerminalDimensions`)
+- [x] Move `state/reducer.ts`, `state/commands.ts`, `state/handlers.ts` — zero content change,
+      zero-Ink/React-import property confirmed held
+- [x] Move + adapt `util/format.ts` to feed the transcript viewport
+- [x] Verify + move `theme/theme.ts` — confirmed `parseColor` accepts ANSI-16 names and the
+      `userBg` hex value identically to Ink's shape; Design conformance constraints applied
+- [x] Split `components.tsx` into `ui/ErrorLine.tsx`, `ui/WarningBox.tsx`, `ui/ConfirmPrompt.tsx`,
       `ui/ListRow.tsx`
-- [ ] Rewrite `runtime/renderOptions.ts` — find OpenTUI's equivalents for `interactive`/
-      `exitOnCtrlC`
-- [ ] Delete `altScreen.ts`; relocate any signal-cleanup registration it held
-- [ ] Confirm square-corner border style at all 9 named surfaces (Design conformance)
-- [ ] Edit `cli.ts`'s three mount/import call sites (1844-1845, 2408, 2831-2832) to OpenTUI's API
-- [ ] Remove `ink`, `ink-testing-library` from `apps/cli/package.json` — hard cutover, no partial
-      dependency left behind
+- [x] Rewrite `runtime/renderOptions.ts` — `exitSignals: []` (found via source read: OpenTUI's
+      renderer unconditionally registers competing process signal handlers unless emptied,
+      broader than just the Ctrl-C case `exitOnCtrlC` guards); confirmed no CI-env-var
+      auto-detection equivalent exists in OpenTUI (nothing to override)
+- [x] Delete `altScreen.ts` — fully removed once `welcomeSplash.ts`/`guidedSetup.ts` were ported
+      onto the shared renderer's real `screenMode: "alternate-screen"` control (a provisional
+      `legacyAltScreen.ts` bridged the gap mid-Phase-2, itself deleted once no longer needed)
+- [x] Confirm square-corner border style at all 9 named surfaces (Design conformance) — confirmed
+      `borderStyle="single"` is also OpenTUI's own default (verified via source, not assumed)
+- [x] Edit `cli.ts`'s three mount/import call sites to OpenTUI's API — switched from lazy to
+      static `ink`/`react` imports (verified no devtools-connect reason for laziness exists
+      under `@opentui/react`)
+- [x] Remove `ink`, `ink-testing-library` from `apps/cli/package.json` — hard cutover complete,
+      zero `ink` imports anywhere in production code (verified repo-wide); one accepted cost:
+      `inkInputSpike.test.tsx` (previously passing) now hard-errors, explicitly this Phase's job
+      below to retire/replace
 
 ## Phase 3 — Test suite replacement
 
