@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { bucketKeyFor, isFreeSuffixed, resolveRateLimit } from "../lib/rateLimit";
+import {
+  bucketsFor,
+  FREE_BUCKET,
+  GLOBAL_FREE_DAY_BUCKET,
+  GLOBAL_FREE_DAY_BUCKET_KEY,
+  GLOBAL_FREE_MIN_BUCKET,
+  GLOBAL_FREE_MIN_BUCKET_KEY,
+  PAID_BUCKET,
+  resolveRateLimit,
+} from "../lib/rateLimit";
 
 describe("resolveRateLimit", () => {
   test("falls back when unset", () => {
@@ -37,28 +46,62 @@ describe("resolveRateLimit", () => {
   });
 });
 
-describe("bucketKeyFor", () => {
-  test("free plan maps to the free bucket key", () => {
-    expect(bucketKeyFor("user_1", "free")).toBe("user:user_1:free");
+describe("bucketsFor", () => {
+  test("free plan on an ordinary model: only the per-user free bucket", () => {
+    expect(bucketsFor("user_1", "free", "openai/gpt-5")).toEqual([
+      { key: "user:user_1:free", config: FREE_BUCKET, responseCode: "user_rate_limited" },
+    ]);
   });
 
-  test.each(["pro", "max", "ultra"] as const)("%s plan maps to the paid bucket key", (plan) => {
-    expect(bucketKeyFor("user_1", plan)).toBe("user:user_1:paid");
-  });
-});
+  test.each(["pro", "max", "ultra"] as const)(
+    "%s plan on an ordinary model: only the per-user paid bucket",
+    (plan) => {
+      expect(bucketsFor("user_1", plan, "openai/gpt-5")).toEqual([
+        { key: "user:user_1:paid", config: PAID_BUCKET, responseCode: "user_rate_limited" },
+      ]);
+    },
+  );
 
-describe("isFreeSuffixed", () => {
-  test("a `:free`-suffixed id is true", () => {
-    expect(isFreeSuffixed("openai/gpt-oss-120b:free")).toBe(true);
+  test("free plan on a `:free`-suffixed model: per-user bucket, then both global buckets", () => {
+    expect(bucketsFor("user_1", "free", "openai/gpt-oss-120b:free")).toEqual([
+      { key: "user:user_1:free", config: FREE_BUCKET, responseCode: "user_rate_limited" },
+      {
+        key: GLOBAL_FREE_MIN_BUCKET_KEY,
+        config: GLOBAL_FREE_MIN_BUCKET,
+        responseCode: "global_rate_limited",
+      },
+      {
+        key: GLOBAL_FREE_DAY_BUCKET_KEY,
+        config: GLOBAL_FREE_DAY_BUCKET,
+        responseCode: "global_rate_limited",
+      },
+    ]);
+  });
+
+  // The global buckets protect OpenRouter's real, account-wide `:free` ceiling, which isn't
+  // scoped by any plan concept seri invented — a paid plan naming a `:free`-suffixed model must
+  // debit it too.
+  test("a paid plan on a `:free`-suffixed model still includes both global buckets", () => {
+    expect(bucketsFor("user_1", "pro", "openai/gpt-oss-120b:free")).toEqual([
+      { key: "user:user_1:paid", config: PAID_BUCKET, responseCode: "user_rate_limited" },
+      {
+        key: GLOBAL_FREE_MIN_BUCKET_KEY,
+        config: GLOBAL_FREE_MIN_BUCKET,
+        responseCode: "global_rate_limited",
+      },
+      {
+        key: GLOBAL_FREE_DAY_BUCKET_KEY,
+        config: GLOBAL_FREE_DAY_BUCKET,
+        responseCode: "global_rate_limited",
+      },
+    ]);
   });
 
   // Live counter-example from research.md: $0-priced but no `:free` suffix — a different
   // predicate from isZeroPriceEntry, deliberately not conflated here.
-  test("a $0-priced, non-`:free`-suffixed id (stealth/ox-alpha-shaped) is false", () => {
-    expect(isFreeSuffixed("stealth/ox-alpha")).toBe(false);
-  });
-
-  test("an id with no colon at all is false", () => {
-    expect(isFreeSuffixed("openai/gpt-5")).toBe(false);
+  test("a $0-priced, non-`:free`-suffixed model (stealth/ox-alpha-shaped) never adds the global buckets", () => {
+    expect(bucketsFor("user_1", "free", "stealth/ox-alpha")).toEqual([
+      { key: "user:user_1:free", config: FREE_BUCKET, responseCode: "user_rate_limited" },
+    ]);
   });
 });

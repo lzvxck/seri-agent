@@ -15,17 +15,7 @@ import {
 } from "../../../../../lib/entitlement";
 import { getPolarClient } from "../../../../../lib/polar";
 import { decidePreflight, provisionalRow, usageUpdate } from "../../../../../lib/quota";
-import {
-  bucketKeyFor,
-  type BucketConfig,
-  FREE_BUCKET,
-  GLOBAL_FREE_DAY_BUCKET,
-  GLOBAL_FREE_DAY_BUCKET_KEY,
-  GLOBAL_FREE_MIN_BUCKET,
-  GLOBAL_FREE_MIN_BUCKET_KEY,
-  isFreeSuffixed,
-  PAID_BUCKET,
-} from "../../../../../lib/rateLimit";
+import { bucketsFor, claimConcurrencySlot, debitBucket } from "../../../../../lib/rateLimit";
 import { createUsageTap, forwardableHeaders } from "../../../../../lib/streamUsage";
 import { getSupabaseClient } from "../../../../../lib/supabase";
 import { insertUsageEvent, updateUsageEvent } from "../../../../../lib/usageLedger";
@@ -46,31 +36,6 @@ export type RouteDeps = {
   after?: typeof afterReal;
 };
 
-// debit_bucket returns table(allowed, remaining, retry_after_seconds) — one row, or none if the
-// bucket_key lookup itself failed. No row is treated as "allowed": this is a second, additive
-// control layered in front of the quota checks above, not the last line of defense, so a rate-
-// limit-store hiccup fails open rather than 503ing every gateway request on top of it.
-async function debitBucket(
-  supabase: SupabaseClient,
-  bucketKey: string,
-  cfg: BucketConfig,
-): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds: number } | null> {
-  const { data, error } = await supabase.rpc("debit_bucket", {
-    p_bucket_key: bucketKey,
-    p_capacity: cfg.burst,
-    p_refill_rate: cfg.ratePerMin / 60,
-    p_cost: 1,
-  });
-  if (error) {
-    console.error("debit_bucket failed:", error);
-  }
-  type Row = { allowed: boolean; remaining: number; retry_after_seconds: number };
-  const row = (data as Row[] | null)?.[0];
-  return row
-    ? { allowed: row.allowed, remaining: row.remaining, retryAfterSeconds: row.retry_after_seconds }
-    : null;
-}
-
 // Wraps a streamed response body so `release` fires when the stream actually finishes draining
 // — the reader hitting `done`, the reader erroring, or the downstream consumer cancelling (a
 // client disconnect mid-stream) — rather than when the Response object carrying this body is
@@ -78,7 +43,7 @@ async function debitBucket(
 // the synchronous `finally` around the block that builds this Response, which fires at TTFB.
 function releaseOnStreamDrain(
   body: ReadableStream<Uint8Array>,
-  release: () => PromiseLike<unknown>,
+  release: () => Promise<void>,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let released = false;
@@ -218,79 +183,28 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   }
 
   // Cheapest/most-final-first, so a request that will be rejected on rate never claims a
-  // concurrency slot it would then have to release. Paid only ever reaches the per-user check —
-  // no global bucket (no shared OpenRouter ceiling to protect on the paid path) and no
-  // concurrency claim.
-  const userBucket = await debitBucket(
-    supabase,
-    bucketKeyFor(identity.userId, plan),
-    plan === "free" ? FREE_BUCKET : PAID_BUCKET,
-  );
-  if (userBucket && !userBucket.allowed) {
-    return rateLimitedResponse(
-      "user_rate_limited",
-      userBucket.remaining,
-      userBucket.retryAfterSeconds,
-    );
-  }
-
-  // Only `:free`-suffixed models share OpenRouter's account-global rate ceiling — a distinct
-  // predicate from isZeroPriceEntry (a $0-priced, non-`:free`-suffixed model does not debit this
-  // bucket at all). Applies regardless of plan: decidePreflight does not restrict which models a
-  // paid plan can request by price/id, so a paid request naming a `:free`-suffixed model shares
-  // the exact same OpenRouter-account-wide ceiling a Free request would and must debit it too.
-  if (isFreeSuffixed(modelId)) {
-    const globalMin = await debitBucket(
-      supabase,
-      GLOBAL_FREE_MIN_BUCKET_KEY,
-      GLOBAL_FREE_MIN_BUCKET,
-    );
-    if (globalMin && !globalMin.allowed) {
-      return rateLimitedResponse(
-        "global_rate_limited",
-        globalMin.remaining,
-        globalMin.retryAfterSeconds,
-      );
-    }
-    const globalDay = await debitBucket(
-      supabase,
-      GLOBAL_FREE_DAY_BUCKET_KEY,
-      GLOBAL_FREE_DAY_BUCKET,
-    );
-    if (globalDay && !globalDay.allowed) {
-      return rateLimitedResponse(
-        "global_rate_limited",
-        globalDay.remaining,
-        globalDay.retryAfterSeconds,
-      );
+  // concurrency slot it would then have to release — see bucketsFor's own comment for the
+  // per-user-then-global ordering and why the global checks aren't gated on plan.
+  for (const check of bucketsFor(identity.userId, plan, modelId)) {
+    const result = await debitBucket(supabase, check.key, check.config);
+    if (!result.allowed) {
+      return rateLimitedResponse(check.responseCode, result.remaining, result.retryAfterSeconds);
     }
   }
 
-  // Free's max_parallel_requests=1 control. Released explicitly on every exit — the finally
-  // block below for every non-streaming exit, or releaseOnStreamDrain above once a streamed
-  // body actually finishes — rather than left to claim_concurrency_slot's stale-reclaim TTL
-  // alone, so a Free user's own next request is never blocked by their just-finished one.
-  // claim_concurrency_slot returns the claim's started_at (or no rows if another request is
-  // genuinely in flight) — captured here and echoed back on release below, so a release only
-  // ever removes THIS request's own claim: if the stale-reclaim window has since let another
-  // request steal the row, the started_at this request holds no longer matches, the DELETE
-  // affects zero rows, and the new owner remains responsible for its own release.
-  let claimedConcurrencySlot = false;
-  let claimedAt: string | null = null;
+  // Free's max_parallel_requests=1 control. `release` is non-null only for a successful Free
+  // claim; it stays null for every paid request, a refused claim (handled by the 429 below), and
+  // a claim_concurrency_slot RPC error (claimConcurrencySlot's own fail-open posture). Called
+  // exactly once per exit path below: the streaming path hands it to releaseOnStreamDrain and
+  // nulls this variable so the body actually finishes draining before it fires, rather than at
+  // this function's own TTFB; every other exit calls it directly in the outer finally.
+  let release: (() => Promise<void>) | null = null;
   if (plan === "free") {
-    const { data: claimed, error: claimError } = await supabase.rpc("claim_concurrency_slot", {
-      p_user_id: identity.userId,
-    });
-    if (claimError) {
-      // Same fail-open posture as debitBucket: this is a second, additive control, not the last
-      // line of defense — an RPC hiccup should not 429 every Free request.
-      console.error("claim_concurrency_slot failed:", claimError);
-    } else if (claimed === null) {
+    const claim = await claimConcurrencySlot(supabase, identity.userId);
+    if (!claim.allowed) {
       return rateLimitedResponse("concurrency_limit", 0, 5);
-    } else {
-      claimedConcurrencySlot = true;
-      claimedAt = claimed;
     }
+    release = claim.release;
   }
 
   try {
@@ -378,19 +292,11 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
       const tapped = upstream.body.pipeThrough(usageTap);
       // The Free concurrency slot is released when this streamed body actually drains, not by
       // the outer finally below — that finally fires as soon as this Response is constructed
-      // (TTFB), long before a real generation finishes streaming. claimedConcurrencySlot is
-      // cleared here so the outer finally does not also try to release it.
-      const releaseSlot = claimedConcurrencySlot;
-      claimedConcurrencySlot = false;
-      const body = releaseSlot
-        ? releaseOnStreamDrain(tapped, () =>
-            supabase
-              .from("active_requests")
-              .delete()
-              .eq("workos_user_id", identity.userId)
-              .eq("started_at", claimedAt),
-          )
-        : tapped;
+      // (TTFB), long before a real generation finishes streaming. `release` is cleared here so
+      // the outer finally does not also try to release it.
+      const streamRelease = release;
+      release = null;
+      const body = streamRelease ? releaseOnStreamDrain(tapped, streamRelease) : tapped;
       return new Response(body, {
         status: upstream.status,
         headers: forwardableHeaders(upstream.headers),
@@ -423,13 +329,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
       headers: forwardableHeaders(upstream.headers),
     });
   } finally {
-    if (claimedConcurrencySlot) {
-      await supabase
-        .from("active_requests")
-        .delete()
-        .eq("workos_user_id", identity.userId)
-        .eq("started_at", claimedAt);
-    }
+    await release?.();
   }
 }
 
