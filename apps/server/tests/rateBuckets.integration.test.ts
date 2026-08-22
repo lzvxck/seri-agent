@@ -2,14 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { createClient } from "@supabase/supabase-js";
 
 // Real local Supabase stack only (`supabase start`, migrations applied) — silently skipped
-// unless SERI_TEST_SUPABASE_URL is set (e.g. in a developer's own shell). Never hardcode a real
-// project's URL/key here; both are read from env vars only, so this is skipped everywhere
-// neither is set (including CI, which has no local Supabase stack running). Mocking
+// unless both SERI_TEST_SUPABASE_URL and SERI_TEST_SUPABASE_SERVICE_ROLE_KEY are set (e.g. in a
+// developer's own shell); checking the URL alone would let a shell with only the URL set run
+// every test and have createClient throw on the missing key instead of skipping. Never hardcode
+// a real project's URL/key here; both are read from env vars only, so this is skipped everywhere
+// either is unset (including CI, which has no local Supabase stack running). Mocking
 // supabase.rpc() (gatewayRoute.test.ts) can prove the route calls debit_bucket/
 // claim_concurrency_slot correctly; it structurally cannot prove either RPC's own atomicity
 // under concurrent callers, which is the entire reason they're plpgsql/SQL functions instead of
 // two separate SELECT+UPDATE calls — that's what this file proves instead.
-describe.skipIf(!process.env.SERI_TEST_SUPABASE_URL)(
+describe.skipIf(
+  !process.env.SERI_TEST_SUPABASE_URL || !process.env.SERI_TEST_SUPABASE_SERVICE_ROLE_KEY,
+)(
   "debit_bucket + claim_concurrency_slot (real local Supabase)",
   () => {
     // Constructed inside each test, not at describe-body scope: describe.skipIf still runs its
