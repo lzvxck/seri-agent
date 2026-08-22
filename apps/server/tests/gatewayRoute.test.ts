@@ -62,9 +62,10 @@ function fakeUsageSupabaseTracking(
     upsertError?: unknown;
     // Per-RPC-name override; default (no override) makes every rate-limit check pass, so tests
     // that don't care about rate limiting don't have to configure it. debit_bucket returns a
-    // one-row table per research.md's `returns table(allowed, remaining, retry_after_seconds)`;
-    // claim_concurrency_slot returns a single boolean (data !== null means claimed), per its own
-    // "plain SQL function" return shape.
+    // one-row table per supabase/migrations/20260821120000_rate_buckets.sql's
+    // `returns table(allowed, remaining, retry_after_seconds)`; claim_concurrency_slot returns
+    // the claim's started_at, or no rows (data === null) when refused, per
+    // supabase/migrations/20260821130000_active_requests.sql's `returns timestamptz`.
     rpc?: (
       name: string,
       args: Record<string, unknown>,
@@ -75,19 +76,23 @@ function fakeUsageSupabaseTracking(
   const updates: { row: Record<string, unknown>; idempotencyKey: string }[] = [];
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const activeRequestsDeletes: string[] = [];
+  const activeRequestsDeleteCalls: { userId: string; startedAt: unknown }[] = [];
   const defaultRpcResult = (name: string): { data: unknown; error: unknown } =>
     name === "claim_concurrency_slot"
-      ? { data: true, error: null }
+      ? { data: "2026-01-01T00:00:00.000Z", error: null }
       : { data: [{ allowed: true, remaining: 999, retry_after_seconds: 0 }], error: null };
   const client = {
     from: (table: string) => {
       if (table === "active_requests") {
         return {
           delete: () => ({
-            eq: (_column: string, value: string) => {
-              activeRequestsDeletes.push(value);
-              return Promise.resolve({ data: null, error: null });
-            },
+            eq: (_column1: string, userId: string) => ({
+              eq: (_column2: string, startedAt: unknown) => {
+                activeRequestsDeletes.push(userId);
+                activeRequestsDeleteCalls.push({ userId, startedAt });
+                return Promise.resolve({ data: null, error: null });
+              },
+            }),
           }),
         };
       }
@@ -127,6 +132,7 @@ function fakeUsageSupabaseTracking(
     updates,
     rpcCalls,
     activeRequestsDeletes,
+    activeRequestsDeleteCalls,
   };
 }
 
@@ -1012,5 +1018,43 @@ describe("handlePost — rate limiting", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ code: "usage_ledger_unavailable" });
     expect(activeRequestsDeletes).toEqual(["user_1"]);
+  });
+
+  // Reproduces the race the started_at scoping fixes: user A claims at t=0 and streams past the
+  // stale-reclaim window; a second request for the same user (e.g. a retry) steals the slot at
+  // t=35, getting its own, later started_at. Without scoping the release by started_at (not just
+  // workos_user_id), A's eventual release would delete the thief's still-live claim instead of
+  // its own. Simulated here via two handlePost calls sharing one fake client whose
+  // claim_concurrency_slot mock returns a different started_at each call.
+  test("each request releases only its own claim's started_at, even when a later request stole the slot", async () => {
+    const claimedTimestamps = ["2026-01-01T00:00:00.000Z", "2026-01-01T00:00:35.000Z"];
+    let claimCallCount = 0;
+    const { client: supabase, activeRequestsDeleteCalls } = fakeUsageSupabaseTracking({
+      count: 0,
+      rpc: (name) =>
+        name === "claim_concurrency_slot"
+          ? { data: claimedTimestamps[claimCallCount++], error: null }
+          : undefined,
+    });
+    const fetchFn = (async () => completedNonStreamResponse()) as unknown as typeof fetch;
+    const deps = {
+      supabase,
+      polar: fakePolarWith([]),
+      getAccountForToken: identityStub(fakeIdentity({ plan: "free", status: "active" })),
+      fetchFn,
+      after: fakeAfter,
+    };
+
+    await withCatalogEntry("stealth/ox-alpha", () =>
+      handlePost(gatewayRequest({ model: "stealth/ox-alpha" }), deps),
+    );
+    await withCatalogEntry("stealth/ox-alpha", () =>
+      handlePost(gatewayRequest({ model: "stealth/ox-alpha" }), deps),
+    );
+
+    expect(activeRequestsDeleteCalls).toEqual([
+      { userId: "user_1", startedAt: claimedTimestamps[0] },
+      { userId: "user_1", startedAt: claimedTimestamps[1] },
+    ]);
   });
 });

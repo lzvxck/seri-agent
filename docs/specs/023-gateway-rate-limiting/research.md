@@ -269,9 +269,9 @@ const { data, error } = await supabase.rpc("debit_bucket", {
 ```sql
 create or replace function public.claim_concurrency_slot(
   p_user_id            text,
-  p_stale_after_seconds int default 30
+  p_stale_after_seconds int default 300 -- STALE_AFTER_SECONDS_DEFAULT
 )
-returns boolean
+returns timestamptz
 language sql
 as $$
   insert into public.active_requests (workos_user_id, started_at)
@@ -279,20 +279,31 @@ as $$
   on conflict (workos_user_id) do update
     set started_at = excluded.started_at
     where public.active_requests.started_at < clock_timestamp() - (p_stale_after_seconds || ' seconds')::interval
-  returning true;
+  returning started_at;
 $$;
 ```
 
-Returns a single `true` row if the claim succeeded (either no existing row, or the existing row
-was stale and got stolen); returns zero rows if another request is genuinely in flight — the
+Returns the claim's `started_at` if the claim succeeded (either no existing row, or the existing
+row was stale and got stolen); returns zero rows if another request is genuinely in flight — the
 caller checks `data !== null` (a plain SQL function, not plpgsql, since it's one statement — no
-procedural logic needed). `p_stale_after_seconds = 30` is a safety net for a crashed/killed
-invocation (Vercel tearing down mid-stream) that never reaches its release, not the primary
-release path — see below for why the primary path must still be an explicit release.
+procedural logic needed). `p_stale_after_seconds` defaults to 300s (5 minutes), well above a
+realistic max stream duration — a shorter window (30s, this design's original value) lets a
+still-streaming request's slot be stolen by a concurrent retry for the same user before the
+original request ever finishes, and both this default and the returned `started_at` exist to
+close that gap: it is a safety net for a crashed/killed invocation (Vercel tearing down mid-
+stream) that never reaches its release, not the primary release path — see below for why the
+primary path must still be an explicit release scoped to the exact claim it made.
 
-Release (plain delete, no RPC — a single `DELETE` needs no additional atomicity):
+Release (plain delete, no RPC — a single `DELETE` needs no additional atomicity), scoped to BOTH
+the user id and the exact `started_at` this request's own claim returned — not `workos_user_id`
+alone, which would let this request's release delete a *different* claim if its own had since
+been stolen by a stale-window reclaim:
 ```ts
-await supabase.from("active_requests").delete().eq("workos_user_id", identity.userId);
+await supabase
+  .from("active_requests")
+  .delete()
+  .eq("workos_user_id", identity.userId)
+  .eq("started_at", claimedAt);
 ```
 
 ### Route integration
@@ -413,7 +424,7 @@ considered verified.
 | risk | likelihood | mitigation |
 |------|------------|------------|
 | Non-`:free` $0-priced model (e.g. `stealth/ox-alpha`) is in fact subject to OpenRouter's global ceiling, but this design excludes it from the global bucket | Unknown — no source confirms either way | Explicitly flagged as an open question below; conservative default (exclude) chosen deliberately rather than silently guessed either direction; re-verify per-model before serving such a model to Free users |
-| `active_requests` release is skipped by an untested exit path, permanently blocking a user until the 30s stale-reclaim window | Medium without the explicit test asserting release on every exit | New `gatewayRoute.test.ts` cases assert release on both success paths and at least one early-503 path (see test plan) |
+| `active_requests` release is skipped by an untested exit path, permanently blocking a user until the 300s stale-reclaim window | Medium without the explicit test asserting release on every exit | New `gatewayRoute.test.ts` cases assert release on both success paths and at least one early-503 path (see test plan) |
 | Starting rate/burst numbers (below) are wrong for real traffic | High — explicitly acknowledged as guesses, same posture as the existing `FREE_DAILY_REQUEST_CAP` | Env-overridable per the `rateLimit.ts` design (Option B), same operational-tuning posture as the existing daily caps; instrument and revisit, not a blocking concern for this pass |
 | seri's actual OpenRouter account credit tier (which sets the daily ceiling at 50 vs. 1000) is not confirmed in this codebase | Medium | Flagged as an open question; sizing math below shows both cases, default to the conservative (50/day) until confirmed operationally |
 | A hot `global:free:*` bucket row becomes a lock-contention bottleneck if Free traffic grows significantly | Low at current scale | Named explicitly in the issue's own research as the first thing to move to something faster if it becomes real; not a concern at anticipated initial Free volumes — single-row lock contention only matters at request rates far above what the sized numbers below even permit |

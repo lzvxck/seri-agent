@@ -268,7 +268,13 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
   // block below for every non-streaming exit, or releaseOnStreamDrain above once a streamed
   // body actually finishes — rather than left to claim_concurrency_slot's stale-reclaim TTL
   // alone, so a Free user's own next request is never blocked by their just-finished one.
+  // claim_concurrency_slot returns the claim's started_at (or no rows if another request is
+  // genuinely in flight) — captured here and echoed back on release below, so a release only
+  // ever removes THIS request's own claim: if the stale-reclaim window has since let another
+  // request steal the row, the started_at this request holds no longer matches, the DELETE
+  // affects zero rows, and the new owner remains responsible for its own release.
   let claimedConcurrencySlot = false;
+  let claimedAt: string | null = null;
   if (plan === "free") {
     const { data: claimed, error: claimError } = await supabase.rpc("claim_concurrency_slot", {
       p_user_id: identity.userId,
@@ -281,6 +287,7 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
       return rateLimitedResponse("concurrency_limit", 0, 5);
     } else {
       claimedConcurrencySlot = true;
+      claimedAt = claimed;
     }
   }
 
@@ -375,7 +382,11 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
       claimedConcurrencySlot = false;
       const body = releaseSlot
         ? releaseOnStreamDrain(tapped, () =>
-            supabase.from("active_requests").delete().eq("workos_user_id", identity.userId),
+            supabase
+              .from("active_requests")
+              .delete()
+              .eq("workos_user_id", identity.userId)
+              .eq("started_at", claimedAt),
           )
         : tapped;
       return new Response(body, {
@@ -411,7 +422,11 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
     });
   } finally {
     if (claimedConcurrencySlot) {
-      await supabase.from("active_requests").delete().eq("workos_user_id", identity.userId);
+      await supabase
+        .from("active_requests")
+        .delete()
+        .eq("workos_user_id", identity.userId)
+        .eq("started_at", claimedAt);
     }
   }
 }
