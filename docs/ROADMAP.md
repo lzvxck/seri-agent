@@ -61,7 +61,7 @@ permanent, not transitional. Read it whenever an older document names a stage.
 | 021 | [Trajectory learning + `POLICY.md`](./specs/021-trajectory-learning/) | ⬜ post-release | — |
 | 022 | [Hosted gateway](./specs/022-hosted-gateway/) | ✅ done | #122, #123 |
 | 023 | [Gateway rate limiting](./specs/023-gateway-rate-limiting/) | 🟡 research approved, not built | — |
-| 024 | [TUI `/clear` command](./specs/024-tui-clear/) | 🟡 built, PR pending | — |
+| 024 | [TUI `/clear` command](./specs/024-tui-clear/) | 🟡 built, PR open | #149 |
 
 **How this table was reconciled (2026-08-21):** mechanically, from `git log` merges #17–#146 and the
 `STATE.md` of each loop under `.claude/loops/_archive/`. The previous roadmap had last been
