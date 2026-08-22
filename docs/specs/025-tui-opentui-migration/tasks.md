@@ -18,16 +18,25 @@ do not start a phase before the previous one's boxes are all checked.
       arch) + 2/5 locally pre-CI. No `ERR_DLOPEN_FAILED` anywhere. Remaining 2 targets deferred to
       release.yml's existing tag-triggered matrix. PASSED — proceeding to Phase 1.
 
-## Phase 1 — Real-pipeline spike (stop-gate)
+## Phase 1 — Real-pipeline spike (stop-gate) — DONE
 
-- [ ] Build an in-repo (not scratchpad) spike: `InputBox` + transcript scrolling against
-      `format.ts`'s actual measured/wrapped rows, not a synthetic transcript
-- [ ] Determine and document: does OpenTUI expose a post-layout measured-dimensions read
-      equivalent to `App.tsx`'s `useBoxMetrics`?
-- [ ] Determine and document: does OpenTUI's native `<input>` fit `InputBox`'s semantics
+- [x] Build an in-repo (not scratchpad) spike: `InputBox` + transcript scrolling against
+      `format.ts`'s actual measured/wrapped rows, not a synthetic transcript --
+      `apps/cli/src/tui/_spike-phase1/` (throwaway, deleted once Phase 2 supersedes it)
+- [x] Determine and document: does OpenTUI expose a post-layout measured-dimensions read
+      equivalent to `App.tsx`'s `useBoxMetrics`? -- NOT NEEDED for the transcript
+      (`<scrollbox stickyScroll stickyStart="bottom">` handles it natively); where needed
+      elsewhere, every `<box ref>` exposes an event-driven `onSizeChange` callback
+- [x] Determine and document: does OpenTUI's native `<input>` fit `InputBox`'s semantics
       (throttled repaint, trailing-cursor, paste/multi-char-chunk terminator-splitting), or does
-      it need to stay hand-rolled against `useKeyboard`/`usePaste`?
-- [ ] **Gate**: both findings documented (PR description or loop artifact) before Phase 2 starts.
+      it need to stay hand-rolled against `useKeyboard`/`usePaste`? -- STAYS HAND-ROLLED; native
+      `<input>` strips paste terminators instead of splitting on them (wrong behavior); OpenTUI
+      delivers paste as its own event via `usePaste`, never through `useKeyboard` like Ink does
+- [x] **Gate**: both findings documented (STATE.md, this loop). Also found: `@opentui/react`'s
+      reconciler commits on a macrotask (needs a second settled render pass post-mount) --
+      test helpers must account for this. Backspace-throttle need for the hand-rolled fallback
+      specifically (not the rejected native `<input>`) is unverified -- Phase 2 must test before
+      dropping PR #135's throttle logic.
 
 ## Phase 2 — Core rewrite + module reorganization
 
