@@ -32,7 +32,7 @@ permanent, not transitional. Read it whenever an older document names a stage.
 | Stage 11a | [`010-tui`](./specs/010-tui/) | Stage 10 | [`020-extensibility`](./specs/020-extensibility/) |
 | Stage 12b–d | [`021-trajectory-learning`](./specs/021-trajectory-learning/) | billing Phase B | [`022-hosted-gateway`](./specs/022-hosted-gateway/) |
 
-`023-gateway-rate-limiting` is new — it never had a stage number.
+`023-gateway-rate-limiting` and `024-tui-clear` are new — neither ever had a stage number.
 
 ## State
 
@@ -61,6 +61,7 @@ permanent, not transitional. Read it whenever an older document names a stage.
 | 021 | [Trajectory learning + `POLICY.md`](./specs/021-trajectory-learning/) | ⬜ post-release | — |
 | 022 | [Hosted gateway](./specs/022-hosted-gateway/) | ✅ done | #122, #123 |
 | 023 | [Gateway rate limiting](./specs/023-gateway-rate-limiting/) | 🟡 implemented, PR open | #148 |
+| 024 | [TUI `/clear` command](./specs/024-tui-clear/) | 🟡 built, PR open | #149 |
 
 **How this table was reconciled (2026-08-21):** mechanically, from `git log` merges #17–#146 and the
 `STATE.md` of each loop under `.claude/loops/_archive/`. The previous roadmap had last been
