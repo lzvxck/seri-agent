@@ -1,32 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import { resetCatalogCache } from "@seri/model-catalog";
-import { after as afterReal } from "next/server";
 import { handlePost } from "../app/api/gateway/chat/completions/route";
-import { fakeIdentity, fakePolarWith, fakeUsageSupabaseTracking, identityStub } from "./fakeSupabase";
+import {
+  completedNonStreamResponse,
+  fakeAfter,
+  fakeIdentity,
+  fakePolarWith,
+  fakeUsageSupabaseTracking,
+  gatewayRequest,
+  identityStub,
+  neverFetch,
+} from "./routeTestFakes";
 
 /*
  * handlePost's rate-limiting control flow: the per-user/global bucket checks and the Free
  * concurrency claim, split out of gatewayRoute.test.ts (which covers every other handlePost
  * concern) once this file's own line count justified a dedicated home.
  */
-
-function gatewayRequest(body: unknown, headers: Record<string, string> = {}): Request {
-  return new Request("http://localhost/api/gateway/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer real-token", ...headers },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
-}
-
-// next/server's real after() requires an actual Next.js request scope (workAsyncStorage),
-// which only exists when Next's own router invokes POST — calling handlePost directly the way
-// every test here does throws "called outside a request scope". This fake just runs the task
-// immediately, which is enough to observe its effects (the usage-ledger update) synchronously.
-// route.ts only ever passes a callback (never a bare promise), but the type has to match
-// after()'s own signature to satisfy RouteDeps.
-const fakeAfter: typeof afterReal = (task) => {
-  void (typeof task === "function" ? task() : task);
-};
 
 // getModelCatalog() has no injectable seam on RouteDeps — only the OpenRouter upstream call's
 // fetchFn is — so a Free-tier rate-limit test that needs decidePreflight to actually pass (a
@@ -65,19 +55,6 @@ async function withCatalogEntry<T>(modelId: string, fn: () => Promise<T>): Promi
     else process.env.SERI_DISABLE_MODELS_FETCH = originalDisableFlag;
     resetCatalogCache();
   }
-}
-
-function neverFetch(): typeof fetch {
-  return (async () => {
-    throw new Error("upstream fetch should not have been called");
-  }) as unknown as typeof fetch;
-}
-
-function completedNonStreamResponse(): Response {
-  return new Response(
-    JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
 }
 
 describe("handlePost — rate limiting", () => {

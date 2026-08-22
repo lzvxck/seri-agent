@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleGet } from "../app/api/gateway/account-status/route";
-import { fakeIdentity, fakePolarWith, identityStub } from "./fakeSupabase";
+import { fakeIdentity, fakePolarWith, identityStub } from "./routeTestFakes";
 
 /*
  * handleGet-level tests, injecting every dependency the route resolves via RouteDeps — same

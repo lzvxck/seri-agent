@@ -1,10 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD } from "@seri/plans";
-import { after as afterReal } from "next/server";
 import { handlePost } from "../app/api/gateway/chat/completions/route";
 import { FREE_DAILY_REQUEST_CAP, PAID_DAILY_REQUEST_CAP } from "../lib/quota";
-import { fakeIdentity, fakePolarWith, fakeUsageSupabaseTracking, identityStub } from "./fakeSupabase";
+import {
+  completedNonStreamResponse,
+  fakeAfter,
+  fakeIdentity,
+  fakePolarWith,
+  fakeUsageSupabaseTracking,
+  gatewayRequest,
+  identityStub,
+  neverFetch,
+} from "./routeTestFakes";
 
 /*
  * handlePost-level tests, injecting every dependency the route resolves via RouteDeps. This is
@@ -25,37 +33,6 @@ beforeAll(() => {
 afterAll(() => {
   delete process.env.SERI_DISABLE_MODELS_FETCH;
 });
-
-function gatewayRequest(body: unknown, headers: Record<string, string> = {}): Request {
-  return new Request("http://localhost/api/gateway/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer real-token", ...headers },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
-}
-
-// next/server's real after() requires an actual Next.js request scope (workAsyncStorage),
-// which only exists when Next's own router invokes POST — calling handlePost directly the way
-// every test here does throws "called outside a request scope". This fake just runs the task
-// immediately, which is enough to observe its effects (the usage-ledger update) synchronously.
-// route.ts only ever passes a callback (never a bare promise), but the type has to match
-// after()'s own signature to satisfy RouteDeps.
-const fakeAfter: typeof afterReal = (task) => {
-  void (typeof task === "function" ? task() : task);
-};
-
-function neverFetch(): typeof fetch {
-  return (async () => {
-    throw new Error("upstream fetch should not have been called");
-  }) as unknown as typeof fetch;
-}
-
-function completedNonStreamResponse(): Response {
-  return new Response(
-    JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
-}
 
 describe("handlePost — refusal paths call the upstream fetch zero times", () => {
   test("missing Authorization header: 401 unauthenticated, zero upstream calls, zero ledger writes", async () => {

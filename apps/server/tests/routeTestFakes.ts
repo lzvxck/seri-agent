@@ -1,9 +1,41 @@
 import type { Polar } from "@polar-sh/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { after as afterReal } from "next/server";
 import type { AccountForToken } from "../lib/accountStatus";
 
 // Shared fakes for handle*-level route tests (gatewayRoute.test.ts, gatewayRateLimit.test.ts,
 // gatewayAccountStatusRoute.test.ts) — previously duplicated verbatim across those files.
+
+export function gatewayRequest(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request("http://localhost/api/gateway/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer real-token", ...headers },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+// next/server's real after() requires an actual Next.js request scope (workAsyncStorage),
+// which only exists when Next's own router invokes POST — calling handlePost directly the way
+// every test here does throws "called outside a request scope". This fake just runs the task
+// immediately, which is enough to observe its effects (the usage-ledger update) synchronously.
+// route.ts only ever passes a callback (never a bare promise), but the type has to match
+// after()'s own signature to satisfy RouteDeps.
+export const fakeAfter: typeof afterReal = (task) => {
+  void (typeof task === "function" ? task() : task);
+};
+
+export function neverFetch(): typeof fetch {
+  return (async () => {
+    throw new Error("upstream fetch should not have been called");
+  }) as unknown as typeof fetch;
+}
+
+export function completedNonStreamResponse(): Response {
+  return new Response(
+    JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
 
 export function fakePolarWith(activeSubscriptions: { id: string; productId: string }[]) {
   const client = {
