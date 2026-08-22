@@ -3,7 +3,14 @@
 -- number can be retuned by redeploying app config, not by writing a migration.
 create table public.rate_buckets (
   bucket_key text primary key,
-  tokens     numeric(12,4) not null,
+  -- numeric(18,8), not (12,4): the global day-bucket's refill rate (35/86400 ~= 0.0000405
+  -- tokens/sec) produces per-call refill increments below (12,4)'s 0.0001 resolution at realistic
+  -- debit frequency — empirically confirmed against a real Postgres instance: 100 debits
+  -- simulating 0.1s elapsed each (10s total) rounded to exactly 0.0000 tokens, while one debit
+  -- simulating the same 10s in a single jump correctly accrued 0.0041 — so frequent small refills
+  -- got rounded to nothing every time, leaving the bucket stuck near-empty under real contention
+  -- instead of smoothly refilling over 24 hours as designed.
+  tokens     numeric(18,8) not null,
   updated_at timestamptz   not null default now()
 );
 
