@@ -319,10 +319,13 @@ on rate never claims a concurrency slot it would then have to release):
 
 1. **Per-user bucket debit** — `user:<id>:free` or `user:<id>:paid` depending on `plan`. Reject
    → 429 `user_rate_limited`, `Retry-After: <retry_after_seconds>`.
-2. **Global `:free` bucket debit** (Free only, only when `entry.id.endsWith(":free")` — see
+2. **Global `:free` bucket debit** (any plan, only when `entry.id.endsWith(":free")` — see
    [Open questions](#open-questions) for why this is scoped by suffix, not by
    `isZeroPriceEntry`) — debit both `global:free:min` and `global:free:day`; if either refuses,
-   reject on that one. Reject → 429 `global_rate_limited`, `Retry-After: <retry_after_seconds>`.
+   reject on that one. Not gated on plan: this protects OpenRouter's real, account-wide `:free`
+   ceiling, which a paid plan's request shares just as much as a Free request's does — nothing in
+   `decidePreflight` restricts which models a paid plan may name. Reject → 429
+   `global_rate_limited`, `Retry-After: <retry_after_seconds>`.
 3. **Concurrency claim** (Free only) — `claim_concurrency_slot`. Reject → 429
    `concurrency_limit`, `Retry-After: 5` (a short fixed hint — the slot could free up at any
    moment, unlike a token bucket's predictable refill).
@@ -340,8 +343,9 @@ inside it — every existing line of `handlePost` stays byte-identical, satisfyi
 the shipped route's diff" constraint's actual intent (don't change what already works) rather
 than its most literal reading (don't touch the file at all past one line).
 
-Paid tier only ever reaches step 1 — no global bucket, no concurrency claim (see sizing below for
-why Paid doesn't need a global bucket).
+Paid tier only ever reaches step 2 if it names a `:free`-suffixed model (rare, but not
+disallowed) — never step 3, the concurrency claim, which stays Free-only (see sizing below for
+why Paid doesn't need its own dedicated global bucket the way Free does).
 
 ### Response contract
 
@@ -392,8 +396,11 @@ returns configurable `{allowed, remaining, retry_after_seconds}`. New cases:
   `stealth/ox-alpha`) — asserts the global bucket RPC is **not** called at all, documenting the
   current conservative scope decision from [Open questions](#open-questions) as an explicit,
   checkable behavior rather than an implicit one.
-- Paid request — asserts only the per-user `paid` bucket RPC is called; global bucket and
-  concurrency RPCs are never called.
+- Paid request on an ordinary (non-`:free`-suffixed) model — asserts only the per-user `paid`
+  bucket RPC is called; global bucket and concurrency RPCs are never called.
+- Paid request naming a `:free`-suffixed model — asserts the global bucket RPC **is** debited
+  despite the plan being paid, since the shared OpenRouter ceiling it protects isn't scoped by
+  plan; concurrency RPCs are still never called (Free-only).
 - Concurrency claim refuses → 429 `concurrency_limit`.
 - Successful Free request — claim succeeds, `fetch` is called, and the release (`.from
   ("active_requests").delete()...`) is asserted to have been called after completion (covering

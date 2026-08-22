@@ -236,8 +236,10 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
 
   // Only `:free`-suffixed models share OpenRouter's account-global rate ceiling — a distinct
   // predicate from isZeroPriceEntry (a $0-priced, non-`:free`-suffixed model does not debit this
-  // bucket at all).
-  if (plan === "free" && isFreeSuffixed(modelId)) {
+  // bucket at all). Applies regardless of plan: decidePreflight does not restrict which models a
+  // paid plan can request by price/id, so a paid request naming a `:free`-suffixed model shares
+  // the exact same OpenRouter-account-wide ceiling a Free request would and must debit it too.
+  if (isFreeSuffixed(modelId)) {
     const globalMin = await debitBucket(
       supabase,
       GLOBAL_FREE_MIN_BUCKET_KEY,

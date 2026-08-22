@@ -893,7 +893,7 @@ describe("handlePost — rate limiting", () => {
     ).toBe(false);
   });
 
-  test("a paid request only calls the per-user paid bucket RPC — never the global or concurrency RPCs", async () => {
+  test("a paid request on a non-`:free`-suffixed model only calls the per-user paid bucket RPC — never the global or concurrency RPCs", async () => {
     const fetchFn = (async () => completedNonStreamResponse()) as unknown as typeof fetch;
     const { client: supabase, rpcCalls, activeRequestsDeletes } = fakeUsageSupabaseTracking({
       costRows: [],
@@ -911,6 +911,37 @@ describe("handlePost — rate limiting", () => {
       { name: "debit_bucket", args: expect.objectContaining({ p_bucket_key: "user:user_1:paid" }) },
     ]);
     expect(activeRequestsDeletes).toHaveLength(0);
+  });
+
+  // The global `:free` bucket protects OpenRouter's real, account-wide `:free` ceiling, which
+  // isn't scoped by any plan concept seri invented — decidePreflight doesn't restrict which
+  // models a paid plan may name, so a paid request naming a `:free`-suffixed model shares the
+  // exact same shared ceiling a Free request would and must debit it too. Only the concurrency
+  // claim (Free's own max_parallel_requests=1 control) stays plan-gated.
+  test("a paid request naming a `:free`-suffixed model still debits the global bucket, but never claims concurrency", async () => {
+    const fetchFn = (async () => completedNonStreamResponse()) as unknown as typeof fetch;
+    const { client: supabase, rpcCalls } = fakeUsageSupabaseTracking({ costRows: [] });
+
+    const response = await withCatalogEntry("openai/gpt-oss-120b:free", () =>
+      handlePost(gatewayRequest({ model: "openai/gpt-oss-120b:free" }), {
+        supabase,
+        polar: fakePolarWith([]),
+        getAccountForToken: identityStub(fakeIdentity({ plan: "pro", status: "active" })),
+        fetchFn,
+        after: fakeAfter,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(
+      rpcCalls.some(
+        (call) =>
+          call.name === "debit_bucket" &&
+          (call.args.p_bucket_key === "global:free:min" ||
+            call.args.p_bucket_key === "global:free:day"),
+      ),
+    ).toBe(true);
+    expect(rpcCalls.some((call) => call.name === "claim_concurrency_slot")).toBe(false);
   });
 
   // Not `:free`-suffixed, so only the per-user bucket and the concurrency claim apply here —
