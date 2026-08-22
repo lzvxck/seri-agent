@@ -1,18 +1,10 @@
 import { isZeroPriceEntry, type ModelCatalogEntry } from "@seri/model-catalog";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD, type Plan } from "@seri/plans";
+import { resolveNonNegativeNumber } from "./env";
 import type { RawUsage } from "./streamUsage";
 
-// `Number(x) || 50` would silently turn SERI_FREE_DAILY_REQUESTS=0 into 50 — 0 is falsy in JS —
-// making a deliberately-zeroed cap (the natural negative-control value) impossible to set.
-// `Number("")` is 0 too (an unset/blank env assignment reads as an empty string, not undefined),
-// so blank is checked explicitly rather than relying on Number.isFinite to catch it — and a
-// negative override is clamped to 0 rather than trusted, since decidePreflight's
-// `requestsToday >= cap` checks would otherwise read a negative cap as "always allow".
 function resolveDailyCap(raw: string | undefined, fallback: number): number {
-  const trimmed = raw?.trim();
-  if (!trimmed) return fallback;
-  const n = Number(trimmed);
-  return Number.isFinite(n) ? Math.max(0, n) : fallback;
+  return resolveNonNegativeNumber(raw, fallback);
 }
 
 // Default 50: docs-tmp/pricing-tiers.md states outright this number is a guess to be

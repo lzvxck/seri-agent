@@ -1,11 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Polar } from "@polar-sh/sdk";
 import { INCLUDED_SPEND_RATIO, PLAN_MONTHLY_USD } from "@seri/plans";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { after as afterReal } from "next/server";
 import { handlePost } from "../app/api/gateway/chat/completions/route";
-import type { AccountForToken } from "../lib/accountStatus";
 import { FREE_DAILY_REQUEST_CAP, PAID_DAILY_REQUEST_CAP } from "../lib/quota";
+import {
+  completedNonStreamResponse,
+  fakeAfter,
+  fakeIdentity,
+  fakePolarWith,
+  fakeUsageSupabaseTracking,
+  gatewayRequest,
+  identityStub,
+  neverFetch,
+} from "./routeTestFakes";
 
 /*
  * handlePost-level tests, injecting every dependency the route resolves via RouteDeps. This is
@@ -26,96 +33,6 @@ beforeAll(() => {
 afterAll(() => {
   delete process.env.SERI_DISABLE_MODELS_FETCH;
 });
-
-function fakePolarWith(activeSubscriptions: { id: string; productId: string }[]) {
-  const client = {
-    customers: { getStateExternal: () => Promise.resolve({ activeSubscriptions }) },
-  };
-  return client as unknown as Polar;
-}
-
-function fakeIdentity(overrides: Partial<AccountForToken> = {}): AccountForToken {
-  return { userId: "user_1", email: "a@example.com", plan: null, status: null, ...overrides };
-}
-
-function identityStub(identity: AccountForToken | null) {
-  return async () => identity;
-}
-
-function gatewayRequest(body: unknown, headers: Record<string, string> = {}): Request {
-  return new Request("http://localhost/api/gateway/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer real-token", ...headers },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
-}
-
-// Records every upsert/update call rather than answering from fixed opts — needed both to
-// assert on idempotency_key values/call counts, and as a plain fake client where those calls
-// don't matter to the test.
-function fakeUsageSupabaseTracking(
-  opts: {
-    count?: number;
-    costRows?: { cost_usd: number }[];
-    quotaQueryError?: unknown;
-    upsertError?: unknown;
-  } = {},
-) {
-  const upserts: Record<string, unknown>[] = [];
-  const updates: { row: Record<string, unknown>; idempotencyKey: string }[] = [];
-  const client = {
-    from: (table: string) => {
-      if (table !== "usage_events") throw new Error(`unexpected table ${table}`);
-      return {
-        select: (_columns: string, selectOpts?: { count?: string; head?: boolean }) => ({
-          eq: () => ({
-            gte: () => {
-              if (opts.quotaQueryError) return Promise.reject(opts.quotaQueryError);
-              return selectOpts?.head
-                ? Promise.resolve({ count: opts.count ?? 0, data: null, error: null })
-                : Promise.resolve({ data: opts.costRows ?? [], error: null });
-            },
-          }),
-        }),
-        upsert: (row: Record<string, unknown>) => {
-          upserts.push(row);
-          if (opts.upsertError) return Promise.resolve({ data: null, error: opts.upsertError });
-          return Promise.resolve({ data: null, error: null });
-        },
-        update: (row: Record<string, unknown>) => ({
-          eq: (_column: string, value: string) => {
-            updates.push({ row, idempotencyKey: value });
-            return Promise.resolve({ data: null, error: null });
-          },
-        }),
-      };
-    },
-  };
-  return { client: client as unknown as SupabaseClient, upserts, updates };
-}
-
-// next/server's real after() requires an actual Next.js request scope (workAsyncStorage),
-// which only exists when Next's own router invokes POST — calling handlePost directly the way
-// every test here does throws "called outside a request scope". This fake just runs the task
-// immediately, which is enough to observe its effects (the usage-ledger update) synchronously.
-// route.ts only ever passes a callback (never a bare promise), but the type has to match
-// after()'s own signature to satisfy RouteDeps.
-const fakeAfter: typeof afterReal = (task) => {
-  void (typeof task === "function" ? task() : task);
-};
-
-function neverFetch(): typeof fetch {
-  return (async () => {
-    throw new Error("upstream fetch should not have been called");
-  }) as unknown as typeof fetch;
-}
-
-function completedNonStreamResponse(): Response {
-  return new Response(
-    JSON.stringify({ id: "1", usage: { prompt_tokens: 1, completion_tokens: 1 } }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
-}
 
 describe("handlePost — refusal paths call the upstream fetch zero times", () => {
   test("missing Authorization header: 401 unauthenticated, zero upstream calls, zero ledger writes", async () => {

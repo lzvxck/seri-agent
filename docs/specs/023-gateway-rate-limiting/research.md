@@ -201,6 +201,11 @@ create or replace function public.debit_bucket(
 returns table(allowed boolean, remaining numeric, retry_after_seconds numeric)
 language plpgsql
 as $$
+declare
+  v_tokens     numeric;
+  v_updated_at timestamptz;
+  v_available  numeric;
+  v_allowed    boolean;
 begin
   -- Lazily initialize a full bucket on first use. ON CONFLICT DO NOTHING makes this safe under
   -- concurrent first-callers — same "the constraint is the barrier" idiom as provisioning_claims,
@@ -209,43 +214,45 @@ begin
   values (p_bucket_key, p_capacity, clock_timestamp())
   on conflict (bucket_key) do nothing;
 
+  select tokens, updated_at into v_tokens, v_updated_at
+  from public.rate_buckets
+  where bucket_key = p_bucket_key
+  for update;
+
+  v_available := least(p_capacity, v_tokens + p_refill_rate * extract(epoch from (clock_timestamp() - v_updated_at)));
+  v_allowed := v_available >= p_cost;
+
+  update public.rate_buckets
+  set
+    tokens     = case when v_allowed then v_available - p_cost else v_available end,
+    updated_at = clock_timestamp()
+  where bucket_key = p_bucket_key;
+
   return query
-  with refilled as (
-    select
-      bucket_key,
-      least(p_capacity, tokens + p_refill_rate * extract(epoch from (clock_timestamp() - updated_at))) as available
-    from public.rate_buckets
-    where bucket_key = p_bucket_key
-  ),
-  debited as (
-    update public.rate_buckets b
-    set
-      tokens     = case when r.available >= p_cost then r.available - p_cost else r.available end,
-      updated_at = clock_timestamp()
-    from refilled r
-    where b.bucket_key = r.bucket_key
-    returning b.tokens, (r.available >= p_cost) as was_allowed, r.available
-  )
   select
-    was_allowed,
-    tokens,
-    case when was_allowed then 0::numeric
-         else greatest(0, (p_cost - available)) / nullif(p_refill_rate, 0)
-    end
-  from debited;
+    v_allowed,
+    case when v_allowed then v_available - p_cost else v_available end,
+    case when v_allowed then 0::numeric
+         else greatest(0, (p_cost - v_available)) / nullif(p_refill_rate, 0)
+    end;
 end;
 $$;
 ```
 
-Why this is atomic without an explicit `SELECT ... FOR UPDATE`: the `UPDATE ... FROM refilled`
-statement takes the target row's write lock as part of executing the single statement; a second
-concurrent caller targeting the same `bucket_key` blocks on that row lock until the first
-statement commits, then re-evaluates `refilled` against the now-committed `tokens`/`updated_at`.
-This is the same one-statement-is-the-barrier property `debit_bucket`'s design note in
-environment-research.md already sketched (`UPDATE ... SET tokens = least(...) - cost ...
-RETURNING`), refined here into a CTE so `RETURNING` can report the *pre-write* availability
-decision (`was_allowed`) alongside the *post-write* token count, which a bare `UPDATE ...
-RETURNING` cannot do in one pass without either two statements or this CTE split.
+Why this is atomic: `SELECT ... FOR UPDATE` takes the target row's write lock before the refill
+is computed, so a second concurrent caller targeting the same `bucket_key` blocks on that row
+lock until the first invocation's `UPDATE` commits, then re-reads the now-committed
+`tokens`/`updated_at` itself when it resumes. **An earlier version of this design computed the
+refill in a plain `SELECT` inside a CTE (`with refilled as (select ...) update ... from
+refilled`) with no explicit `FOR UPDATE`, reasoning that the `UPDATE`'s own row lock was enough
+— it is not:** the CTE's `SELECT` is materialized once, from the snapshot visible before the
+lock is acquired, and under READ COMMITTED a second caller blocked on that row's lock re-checks
+only the `UPDATE`'s join qual once the lock releases, not the CTE's `SELECT` — so both callers
+can compute `available` from the same stale, pre-debit balance and both be allowed past a
+capacity the bucket cannot actually afford. Locking the row explicitly with `FOR UPDATE` before
+computing the refill closes that gap: the second caller's own `SELECT ... FOR UPDATE` cannot
+proceed until the first caller's transaction (insert/select/update, all inside one function
+call) commits, so it always refills from the row the first caller actually left behind.
 
 Called from `apps/server` as:
 ```ts
@@ -262,9 +269,9 @@ const { data, error } = await supabase.rpc("debit_bucket", {
 ```sql
 create or replace function public.claim_concurrency_slot(
   p_user_id            text,
-  p_stale_after_seconds int default 30
+  p_stale_after_seconds int default 300 -- STALE_AFTER_SECONDS_DEFAULT
 )
-returns boolean
+returns timestamptz
 language sql
 as $$
   insert into public.active_requests (workos_user_id, started_at)
@@ -272,20 +279,35 @@ as $$
   on conflict (workos_user_id) do update
     set started_at = excluded.started_at
     where public.active_requests.started_at < clock_timestamp() - (p_stale_after_seconds || ' seconds')::interval
-  returning true;
+  returning started_at;
 $$;
 ```
 
-Returns a single `true` row if the claim succeeded (either no existing row, or the existing row
-was stale and got stolen); returns zero rows if another request is genuinely in flight — the
+Returns the claim's `started_at` if the claim succeeded (either no existing row, or the existing
+row was stale and got stolen); returns zero rows if another request is genuinely in flight — the
 caller checks `data !== null` (a plain SQL function, not plpgsql, since it's one statement — no
-procedural logic needed). `p_stale_after_seconds = 30` is a safety net for a crashed/killed
-invocation (Vercel tearing down mid-stream) that never reaches its release, not the primary
-release path — see below for why the primary path must still be an explicit release.
+procedural logic needed). `p_stale_after_seconds` defaults to 300s (5 minutes), well above a
+realistic max stream duration — a shorter window (30s, this design's original value) lets a
+still-streaming request's slot be stolen by a concurrent retry for the same user before the
+original request ever finishes, and both this default and the returned `started_at` exist to
+close that gap: it is a safety net for a crashed/killed invocation (Vercel tearing down mid-
+stream) that never reaches its release, not the primary release path — see below for why the
+primary path must still be an explicit release scoped to the exact claim it made. The 300s
+default is env-overridable via `SERI_CONCURRENCY_STALE_SECONDS` (`apps/server/lib/rateLimit.ts`'s
+`CONCURRENCY_STALE_SECONDS`), same pattern as the bucket capacities/rates below — the route
+passes it explicitly as `p_stale_after_seconds` on every `claim_concurrency_slot` call rather than
+relying on the SQL function's own default.
 
-Release (plain delete, no RPC — a single `DELETE` needs no additional atomicity):
+Release (plain delete, no RPC — a single `DELETE` needs no additional atomicity), scoped to BOTH
+the user id and the exact `started_at` this request's own claim returned — not `workos_user_id`
+alone, which would let this request's release delete a *different* claim if its own had since
+been stolen by a stale-window reclaim:
 ```ts
-await supabase.from("active_requests").delete().eq("workos_user_id", identity.userId);
+await supabase
+  .from("active_requests")
+  .delete()
+  .eq("workos_user_id", identity.userId)
+  .eq("started_at", claimedAt);
 ```
 
 ### Route integration
@@ -301,10 +323,13 @@ on rate never claims a concurrency slot it would then have to release):
 
 1. **Per-user bucket debit** — `user:<id>:free` or `user:<id>:paid` depending on `plan`. Reject
    → 429 `user_rate_limited`, `Retry-After: <retry_after_seconds>`.
-2. **Global `:free` bucket debit** (Free only, only when `entry.id.endsWith(":free")` — see
+2. **Global `:free` bucket debit** (any plan, only when `entry.id.endsWith(":free")` — see
    [Open questions](#open-questions) for why this is scoped by suffix, not by
    `isZeroPriceEntry`) — debit both `global:free:min` and `global:free:day`; if either refuses,
-   reject on that one. Reject → 429 `global_rate_limited`, `Retry-After: <retry_after_seconds>`.
+   reject on that one. Not gated on plan: this protects OpenRouter's real, account-wide `:free`
+   ceiling, which a paid plan's request shares just as much as a Free request's does — nothing in
+   `decidePreflight` restricts which models a paid plan may name. Reject → 429
+   `global_rate_limited`, `Retry-After: <retry_after_seconds>`.
 3. **Concurrency claim** (Free only) — `claim_concurrency_slot`. Reject → 429
    `concurrency_limit`, `Retry-After: 5` (a short fixed hint — the slot could free up at any
    moment, unlike a token bucket's predictable refill).
@@ -322,8 +347,9 @@ inside it — every existing line of `handlePost` stays byte-identical, satisfyi
 the shipped route's diff" constraint's actual intent (don't change what already works) rather
 than its most literal reading (don't touch the file at all past one line).
 
-Paid tier only ever reaches step 1 — no global bucket, no concurrency claim (see sizing below for
-why Paid doesn't need a global bucket).
+Paid tier only ever reaches step 2 if it names a `:free`-suffixed model (rare, but not
+disallowed) — never step 3, the concurrency claim, which stays Free-only (see sizing below for
+why Paid doesn't need its own dedicated global bucket the way Free does).
 
 ### Response contract
 
@@ -374,8 +400,11 @@ returns configurable `{allowed, remaining, retry_after_seconds}`. New cases:
   `stealth/ox-alpha`) — asserts the global bucket RPC is **not** called at all, documenting the
   current conservative scope decision from [Open questions](#open-questions) as an explicit,
   checkable behavior rather than an implicit one.
-- Paid request — asserts only the per-user `paid` bucket RPC is called; global bucket and
-  concurrency RPCs are never called.
+- Paid request on an ordinary (non-`:free`-suffixed) model — asserts only the per-user `paid`
+  bucket RPC is called; global bucket and concurrency RPCs are never called.
+- Paid request naming a `:free`-suffixed model — asserts the global bucket RPC **is** debited
+  despite the plan being paid, since the shared OpenRouter ceiling it protects isn't scoped by
+  plan; concurrency RPCs are still never called (Free-only).
 - Concurrency claim refuses → 429 `concurrency_limit`.
 - Successful Free request — claim succeeds, `fetch` is called, and the release (`.from
   ("active_requests").delete()...`) is asserted to have been called after completion (covering
@@ -406,7 +435,7 @@ considered verified.
 | risk | likelihood | mitigation |
 |------|------------|------------|
 | Non-`:free` $0-priced model (e.g. `stealth/ox-alpha`) is in fact subject to OpenRouter's global ceiling, but this design excludes it from the global bucket | Unknown — no source confirms either way | Explicitly flagged as an open question below; conservative default (exclude) chosen deliberately rather than silently guessed either direction; re-verify per-model before serving such a model to Free users |
-| `active_requests` release is skipped by an untested exit path, permanently blocking a user until the 30s stale-reclaim window | Medium without the explicit test asserting release on every exit | New `gatewayRoute.test.ts` cases assert release on both success paths and at least one early-503 path (see test plan) |
+| `active_requests` release is skipped by an untested exit path, permanently blocking a user until the 300s stale-reclaim window | Medium without the explicit test asserting release on every exit | New `gatewayRoute.test.ts` cases assert release on both success paths and at least one early-503 path (see test plan) |
 | Starting rate/burst numbers (below) are wrong for real traffic | High — explicitly acknowledged as guesses, same posture as the existing `FREE_DAILY_REQUEST_CAP` | Env-overridable per the `rateLimit.ts` design (Option B), same operational-tuning posture as the existing daily caps; instrument and revisit, not a blocking concern for this pass |
 | seri's actual OpenRouter account credit tier (which sets the daily ceiling at 50 vs. 1000) is not confirmed in this codebase | Medium | Flagged as an open question; sizing math below shows both cases, default to the conservative (50/day) until confirmed operationally |
 | A hot `global:free:*` bucket row becomes a lock-contention bottleneck if Free traffic grows significantly | Low at current scale | Named explicitly in the issue's own research as the first thing to move to something faster if it becomes real; not a concern at anticipated initial Free volumes — single-row lock contention only matters at request rates far above what the sized numbers below even permit |
