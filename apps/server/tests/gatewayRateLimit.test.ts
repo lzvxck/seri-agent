@@ -161,7 +161,11 @@ describe("handlePost — rate limiting", () => {
 
   test("a paid request on a non-`:free`-suffixed model only calls the per-user paid bucket RPC — never the global or concurrency RPCs", async () => {
     const fetchFn = (async () => completedNonStreamResponse()) as unknown as typeof fetch;
-    const { client: supabase, rpcCalls, activeRequestsDeletes } = fakeUsageSupabaseTracking({
+    const {
+      client: supabase,
+      rpcCalls,
+      activeRequestsDeletes,
+    } = fakeUsageSupabaseTracking({
       costRows: [],
     });
 

@@ -287,7 +287,9 @@ export async function handlePost(request: Request, deps: RouteDeps = {}): Promis
         // this callback settles. A ledger write failure inside it must still not be able to affect
         // the response, which has already streamed by the time flush() runs — updateUsageEvent
         // itself never throws, only logs.
-        after(() => updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId)));
+        after(() =>
+          updateUsageEvent(supabase, idempotencyKey, usageUpdate(usage, entry, requestId)),
+        );
       });
       const tapped = upstream.body.pipeThrough(usageTap);
       // The Free concurrency slot is released when this streamed body actually drains, not by
