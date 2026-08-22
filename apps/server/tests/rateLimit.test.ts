@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   bucketsFor,
+  claimConcurrencySlot,
   FREE_BUCKET,
   GLOBAL_FREE_DAY_BUCKET,
   GLOBAL_FREE_DAY_BUCKET_KEY,
@@ -115,5 +117,32 @@ describe("bucketsFor", () => {
     expect(bucketsFor("user_1", "free", "stealth/ox-alpha")).toEqual([
       { key: "user:user_1:free", config: FREE_BUCKET, responseCode: "user_rate_limited" },
     ]);
+  });
+});
+
+describe("claimConcurrencySlot", () => {
+  // A release failure must not throw — the outer route's `finally` block calls `release()`
+  // unconditionally, and an unhandled rejection there would surface as a 500 on an otherwise
+  // successful request. Logging is the only observable effect worth asserting.
+  test("a release error is logged, not thrown", async () => {
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+    const supabase = {
+      rpc: () => Promise.resolve({ data: "2026-01-01T00:00:00.000Z", error: null }),
+      from: () => ({
+        delete: () => ({
+          eq: () => ({
+            eq: () => Promise.resolve({ data: null, error: { message: "delete failed" } }),
+          }),
+        }),
+      }),
+    };
+
+    const claim = await claimConcurrencySlot(supabase as unknown as SupabaseClient, "user_1");
+    await expect(claim.release?.()).resolves.toBeUndefined();
+
+    console.error = original;
+    expect(errors).toEqual([["active_requests release failed:", { message: "delete failed" }]]);
   });
 });

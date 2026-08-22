@@ -171,11 +171,14 @@ export async function claimConcurrencySlot(
     release: async () => {
       if (released) return;
       released = true;
-      await supabase
+      const { error: releaseError } = await supabase
         .from("active_requests")
         .delete()
         .eq("workos_user_id", userId)
         .eq("started_at", claimedAt);
+      if (releaseError) {
+        console.error("active_requests release failed:", releaseError);
+      }
     },
   };
 }
